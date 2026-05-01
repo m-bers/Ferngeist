@@ -4,32 +4,73 @@ on:
   push:
     branches:
       - "ci/temp-apk-build"
+  workflow_dispatch:
 
 jobs:
-  debug-apk:
+  test:
+    name: Unit tests
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x ./gradlew
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --continue
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.sha }}
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          if-no-files-found: warn
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+  lint:
+    name: Android lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x ./gradlew
+      - name: Run lint
+        # Don't fail the workflow on lint warnings; just publish the report.
+        run: ./gradlew :app:lintDebug || true
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report-${{ github.sha }}
+          path: app/build/reports/lint-results-debug.html
+          if-no-files-found: warn
 
-      - name: Ensure Gradle wrapper is executable
-        run: chmod +x ./gradlew
-
+  debug-apk:
+    name: Debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x ./gradlew
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug
-
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
