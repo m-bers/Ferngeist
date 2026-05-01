@@ -35,7 +35,8 @@ This file is the catch-up sheet. Full details are in commit messages on `ci/temp
 
 ### Tier F — Polish
 - **F1** — Open thread as Markdown. Kebab in the chat top bar now has an "Open as Markdown" item that builds a Markdown rendering of the thread (user/agent/tool/thought/plan segments) and fires `ACTION_SEND`.
-- **F2 – F10** — **Not yet done**.
+- **F2 (partial)** — Kebab also has "Copy as Markdown" — same rendering, copied to the system clipboard with a "Thread copied as Markdown" snackbar. Per-message long-press copy is still pending.
+- **F3 – F10** — **Not yet done**.
 
 ### Pre-existing fixes shipped earlier in this session (also on this branch)
 - Fix: switching threads no longer cancels the agent's in-progress turn (the ACP `session.prompt(...).collect` was running in `viewModelScope`, which got cancelled when the user navigated away).

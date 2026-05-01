@@ -132,9 +132,8 @@ class FerngeistForegroundService : Service() {
 
     private fun handleTurnCompleteEvent(tagged: TaggedTurnCompleteEvent) {
         val nm = getSystemService(NotificationManager::class.java) ?: return
-        if (isAppForeground()) {
-            // User is in the app; they saw the turn finish in the chat — no need
-            // to nag them with an end-of-turn notification.
+        if (shouldSuppressForSession(tagged.event.sessionId)) {
+            // The user is on this chat; they saw the turn finish in-app.
             return
         }
         val notificationId = TURN_COMPLETE_NOTIFICATION_ID_BASE + tagged.event.sessionId.hashCode().and(0x7FFF_FFFF)
@@ -188,11 +187,22 @@ class FerngeistForegroundService : Service() {
     }
 
     private fun isAppForeground(): Boolean {
-        // Returns true when the user has any Ferngeist activity at least RESUMED
-        // (i.e. on screen and interactive). Used to suppress notifications that the
-        // user would otherwise see in-app via the chat sheet.
         return ProcessLifecycleOwner.get().lifecycle.currentState
             .isAtLeast(Lifecycle.State.RESUMED)
+    }
+
+    /**
+     * Whether a notification for [sessionId] should be suppressed. A notification is
+     * only suppressed when the user is already looking at *that exact* chat session
+     * (the in-app sheet handles the case). When the app is in the foreground but
+     * the user is on a different chat — or on the workspace list / settings — the
+     * notification still fires so the user doesn't miss input requests on background
+     * sessions.
+     */
+    private fun shouldSuppressForSession(sessionId: String): Boolean {
+        if (!isAppForeground()) return false
+        return com.tamimarafat.ferngeist.feature.chat.CurrentChatTracker
+            .focusedSessionId.value == sessionId
     }
 
     private fun handlePermissionEvent(tagged: TaggedPermissionEvent) {
@@ -200,9 +210,9 @@ class FerngeistForegroundService : Service() {
         val notificationId = PERMISSION_NOTIFICATION_ID_BASE + tagged.event.toolCallId.hashCode()
         when (val event = tagged.event) {
             is PermissionFlowEvent.Requested -> {
-                if (isAppForeground()) {
-                    // The in-app PermissionRequestSheet will handle this; no need to
-                    // double up with a notification.
+                if (shouldSuppressForSession(event.sessionId)) {
+                    // The user is on the chat for that session; the in-app
+                    // PermissionRequestSheet handles this — don't double up.
                     return
                 }
                 val notification = buildPermissionNotification(

@@ -703,6 +703,13 @@ fun ChatScreen(
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    androidx.compose.runtime.DisposableEffect(sessionId) {
+        com.tamimarafat.ferngeist.feature.chat.CurrentChatTracker.setFocused(sessionId)
+        onDispose {
+            com.tamimarafat.ferngeist.feature.chat.CurrentChatTracker.clearFocused(sessionId)
+        }
+    }
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val navBottomPx = WindowInsets.navigationBars.getBottom(density)
     val systemBottomInsetPx = if (imeBottomPx > navBottomPx) imeBottomPx else navBottomPx
