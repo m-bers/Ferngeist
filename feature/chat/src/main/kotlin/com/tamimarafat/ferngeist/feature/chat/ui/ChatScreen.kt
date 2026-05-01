@@ -970,6 +970,15 @@ fun ChatScreen(
                         onToolCallClick = { segmentId ->
                             selectedToolCallSegmentId = segmentId
                         },
+                        onUserMessageReuse = { content ->
+                            // Tap a previous user message to copy it back into the
+                            // composer for a quick re-send / edit. Mirrors Zed's
+                            // edit-and-resubmit affordance (the message stays in the
+                            // history; the new send appends rather than rewinds).
+                            messageText = content
+                            composerExpanded = true
+                            focusRequester.requestFocus()
+                        },
                     )
 
                     SnackbarHost(

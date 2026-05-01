@@ -185,6 +185,7 @@ internal fun ChatScreenBody(
     onRetryLoad: () -> Unit,
     onThoughtClick: (String) -> Unit,
     onToolCallClick: (String) -> Unit,
+    onUserMessageReuse: ((String) -> Unit)? = null,
 ) {
     when {
         state.isLoading && state.messages.isEmpty() -> {
@@ -212,6 +213,7 @@ internal fun ChatScreenBody(
                 listBottomPadding = listBottomPadding,
                 onThoughtClick = onThoughtClick,
                 onToolCallClick = onToolCallClick,
+                onUserMessageReuse = onUserMessageReuse,
             )
         }
     }
@@ -255,6 +257,7 @@ private fun ChatMessageList(
     listBottomPadding: Dp,
     onThoughtClick: (String) -> Unit,
     onToolCallClick: (String) -> Unit,
+    onUserMessageReuse: ((String) -> Unit)? = null,
 ) {
     LazyColumn(
         state = listState,
@@ -271,6 +274,7 @@ private fun ChatMessageList(
                 showStreamingIndicator = state.isStreaming && message.id == renderedLastMessageId,
                 onThoughtClick = onThoughtClick,
                 onToolCallClick = onToolCallClick,
+                onUserMessageReuse = onUserMessageReuse,
             )
         }
         item(key = "__chat_bottom_spacer") {

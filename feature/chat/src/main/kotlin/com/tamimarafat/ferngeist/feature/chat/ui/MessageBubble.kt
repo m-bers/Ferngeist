@@ -66,6 +66,7 @@ fun MessageBubble(
     showStreamingIndicator: Boolean,
     onThoughtClick: (String) -> Unit,
     onToolCallClick: (String) -> Unit,
+    onUserMessageReuse: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val isUser = message.role == ChatMessage.Role.USER
@@ -76,6 +77,13 @@ fun MessageBubble(
         contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
     ) {
         if (isUser) {
+            val cardModifier = if (onUserMessageReuse != null && message.content.isNotBlank()) {
+                Modifier
+                    .widthIn(max = 420.dp)
+                    .clickable { onUserMessageReuse(message.content) }
+            } else {
+                Modifier.widthIn(max = 420.dp)
+            }
             ElevatedCard(
                 colors = CardDefaults.elevatedCardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -87,7 +95,7 @@ fun MessageBubble(
                     bottomStart = 20.dp,
                     bottomEnd = 8.dp
                 ),
-                modifier = Modifier.widthIn(max = 420.dp)
+                modifier = cardModifier
             ) {
                 UserMessageContent(
                     message = message,
