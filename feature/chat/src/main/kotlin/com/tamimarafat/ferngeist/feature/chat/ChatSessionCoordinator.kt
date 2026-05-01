@@ -57,6 +57,7 @@ internal class ChatSessionCoordinator(
         suspend fun onCancelUnsupported()
         suspend fun onModelUpdated()
         suspend fun onCapabilitiesChanged(capabilities: AcpAgentCapabilities)
+        suspend fun onTurnComplete() {}
     }
 
     private var activeSessionId: String = initialSessionId
@@ -430,14 +431,26 @@ internal class ChatSessionCoordinator(
     }
 
     private suspend fun handleBridgeEvent(event: AppSessionEvent) {
-        if (event !is AppSessionEvent.ModelSelectionConfirmed) return
-
-        val pendingModel = pendingModelSelectionId
-        if (pendingModel != null &&
-            (event.modelId.isNullOrBlank() || event.modelId == pendingModel)
-        ) {
-            pendingModelSelectionId = null
-            callbacks.onModelUpdated()
+        when (event) {
+            is AppSessionEvent.ModelSelectionConfirmed -> {
+                val pendingModel = pendingModelSelectionId
+                if (pendingModel != null &&
+                    (event.modelId.isNullOrBlank() || event.modelId == pendingModel)
+                ) {
+                    pendingModelSelectionId = null
+                    callbacks.onModelUpdated()
+                }
+            }
+            is AppSessionEvent.PromptError -> {
+                callbacks.onOperationError(
+                    message = event.message,
+                    stopStreaming = true,
+                )
+            }
+            is AppSessionEvent.TurnComplete -> {
+                callbacks.onTurnComplete()
+            }
+            else -> Unit
         }
     }
 

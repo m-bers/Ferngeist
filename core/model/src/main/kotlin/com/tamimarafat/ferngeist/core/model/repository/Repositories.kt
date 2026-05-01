@@ -6,6 +6,7 @@ import com.tamimarafat.ferngeist.core.model.LaunchableTarget
 import com.tamimarafat.ferngeist.core.model.LaunchableTargetSessionSettings
 import com.tamimarafat.ferngeist.core.model.ServerConfig
 import com.tamimarafat.ferngeist.core.model.SessionSummary
+import com.tamimarafat.ferngeist.core.model.Workspace
 import kotlinx.coroutines.flow.Flow
 
 interface ServerRepository {
@@ -42,9 +43,48 @@ interface LaunchableTargetRepository {
 
 interface SessionRepository {
     fun getSessions(serverId: String): Flow<List<SessionSummary>>
+    fun getSessionsForWorkspace(workspaceId: String): Flow<List<SessionSummary>>
+    /** Archived threads only — used by the workspace-history surface. */
+    fun getArchivedSessionsForWorkspace(workspaceId: String): Flow<List<SessionSummary>>
+    fun getAllArchivedSessions(): Flow<List<SessionSummary>>
     suspend fun upsertSession(serverId: String, summary: SessionSummary)
+    suspend fun upsertSession(serverId: String, workspaceId: String?, summary: SessionSummary)
+    suspend fun archiveSession(sessionId: String)
+    suspend fun unarchiveSession(sessionId: String)
     suspend fun deleteSession(serverId: String, sessionId: String)
     suspend fun clearSessions(serverId: String)
+}
+
+interface WorkspaceRepository {
+    /** All workspaces, most-recently-updated first. */
+    fun getAllWorkspaces(): Flow<List<Workspace>>
+
+    /** Existing workspace for the given key, or null. */
+    suspend fun findByKey(helperKey: String, cwd: String): Workspace?
+
+    /** Find an existing workspace by id. */
+    suspend fun getById(id: String): Workspace?
+
+    /**
+     * Find an existing workspace for [helperKey]+[cwd], or create one if absent. Returns
+     * the workspace's id, suitable for setting `Session.workspaceId`.
+     */
+    suspend fun findOrCreate(helperKey: String, cwd: String): Workspace
+
+    /** Resolve a server id to its helper key (used when creating workspaces from session context). */
+    suspend fun helperKeyForServer(serverId: String): String?
+
+    /** Convenience: resolve helperKey for the server, then find-or-create the workspace. */
+    suspend fun findOrCreateForServer(serverId: String, cwd: String): Workspace?
+
+    /** Rename a workspace (sets displayName). null clears the override. */
+    suspend fun rename(workspaceId: String, displayName: String?)
+
+    /** Mark a workspace as recently used. */
+    suspend fun touch(workspaceId: String)
+
+    /** Delete a workspace and (optionally) cascade-delete its sessions. */
+    suspend fun delete(workspaceId: String, cascadeSessions: Boolean = true)
 }
 
 interface LaunchableTargetSessionSettingsRepository {

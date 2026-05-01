@@ -10,8 +10,14 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.tamimarafat.ferngeist.MainActivity
 import com.tamimarafat.ferngeist.R
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import androidx.core.app.RemoteInput
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
+import com.tamimarafat.ferngeist.acp.bridge.connection.PermissionFlowEvent
+import com.tamimarafat.ferngeist.acp.bridge.connection.TaggedPermissionEvent
+import com.tamimarafat.ferngeist.acp.bridge.connection.TaggedTurnCompleteEvent
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,14 +32,31 @@ class FerngeistForegroundService : Service() {
 
     companion object {
         const val CHANNEL_ID = "ferngeist_connection"
+        /** High-importance channel used for input-required notifications. */
+        const val INPUT_REQUIRED_CHANNEL_ID = "ferngeist_input_required"
+        /** Default-importance channel for "agent is done, reply?" notifications. */
+        const val TURN_COMPLETE_CHANNEL_ID = "ferngeist_turn_complete"
         const val NOTIFICATION_ID = 1
+        /**
+         * Permission notifications get an id derived from `toolCallId.hashCode()` so
+         * we can cancel/replace them by the same id when the request is resolved.
+         * Reserved range starts above [NOTIFICATION_ID] to avoid collision with the
+         * connection-status notification.
+         */
+        const val PERMISSION_NOTIFICATION_ID_BASE = 1000
+        /**
+         * Turn-complete notifications get an id derived from `sessionId.hashCode()`
+         * (offset to avoid collision with [PERMISSION_NOTIFICATION_ID_BASE]).
+         */
+        const val TURN_COMPLETE_NOTIFICATION_ID_BASE = 100_000
+
         const val ACTION_START = "com.tamimarafat.ferngeist.ACTION_START_FOREGROUND"
         const val ACTION_STOP = "com.tamimarafat.ferngeist.ACTION_STOP_FOREGROUND"
         const val ACTION_DISCONNECT = "com.tamimarafat.ferngeist.ACTION_DISCONNECT"
     }
 
     @Inject
-    lateinit var connectionManager: AcpConnectionManager
+    lateinit var connectionRegistry: AcpConnectionRegistry
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observationJob: Job? = null
@@ -42,6 +65,8 @@ class FerngeistForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        createInputRequiredChannel()
+        createTurnCompleteChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -49,7 +74,7 @@ class FerngeistForegroundService : Service() {
             ACTION_DISCONNECT -> {
                 observationJob?.cancel()
                 scope.launch {
-                    connectionManager.disconnect()
+                    connectionRegistry.disconnectAll()
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -62,7 +87,7 @@ class FerngeistForegroundService : Service() {
 
         if (!isStarted) {
             isStarted = true
-            val notification = buildNotification(connectionManager.connectionState.value, connectionManager.agentInfo.value?.name)
+            val notification = buildNotification(connectionRegistry.connectionStates.value)
             startForeground(NOTIFICATION_ID, notification)
             observeConnectionState()
         }
@@ -83,47 +108,257 @@ class FerngeistForegroundService : Service() {
         observationJob?.cancel()
         observationJob = scope.launch {
             launch {
-                connectionManager.connectionState
-                    .collect { state ->
+                connectionRegistry.connectionStates
+                    .collect { states ->
                         if (!isStarted) return@collect
-                        updateNotification(state)
-                        if (state is AcpConnectionState.Disconnected) {
+                        updateNotification(states)
+                        if (states.isNotEmpty() && states.values.all { it is AcpConnectionState.Disconnected }) {
                             stopSelf()
                         }
                     }
             }
             launch {
-                connectionManager.agentInfo
-                    .collect {
-                        if (!isStarted) return@collect
-                        updateNotification(connectionManager.connectionState.value)
-                    }
+                connectionRegistry.permissionEvents.collect { tagged ->
+                    handlePermissionEvent(tagged)
+                }
+            }
+            launch {
+                connectionRegistry.turnCompleteEvents.collect { tagged ->
+                    handleTurnCompleteEvent(tagged)
+                }
             }
         }
     }
 
-    private fun updateNotification(state: AcpConnectionState) {
+    private fun handleTurnCompleteEvent(tagged: TaggedTurnCompleteEvent) {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (shouldSuppressForSession(tagged.event.sessionId)) {
+            // The user is on this chat; they saw the turn finish in-app.
+            return
+        }
+        val notificationId = TURN_COMPLETE_NOTIFICATION_ID_BASE + tagged.event.sessionId.hashCode().and(0x7FFF_FFFF)
+
+        val agentName = connectionRegistry.existingConnectionFor(tagged.serverId)
+            ?.let { it.currentConnectionConfig()?.serverDisplayName ?: it.agentInfo.value?.name }
+            ?: "Agent"
+
+        val replyIntent = Intent(this, PermissionActionReceiver::class.java).apply {
+            action = PermissionActionReceiver.ACTION_REMOTE_REPLY
+            putExtra(PermissionActionReceiver.EXTRA_SERVER_ID, tagged.serverId)
+            putExtra(PermissionActionReceiver.EXTRA_SESSION_ID, tagged.event.sessionId)
+            putExtra(PermissionActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val replyPi = PendingIntent.getBroadcast(
+            this,
+            notificationId,
+            replyIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val remoteInput = RemoteInput.Builder(PermissionActionReceiver.KEY_REMOTE_INPUT_TEXT)
+            .setLabel(getString(R.string.notification_turn_complete_reply_hint))
+            .build()
+        val replyAction = NotificationCompat.Action.Builder(
+            0,
+            getString(R.string.notification_turn_complete_reply_action),
+            replyPi,
+        )
+            .addRemoteInput(remoteInput)
+            .setAllowGeneratedReplies(true)
+            .build()
+
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            notificationId,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val notification = NotificationCompat.Builder(this, TURN_COMPLETE_CHANNEL_ID)
+            .setContentTitle(getString(R.string.notification_turn_complete_title, agentName))
+            .setContentText(getString(R.string.notification_turn_complete_text))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .addAction(replyAction)
+            .build()
+
+        nm.notify(notificationId, notification)
+    }
+
+    private fun isAppForeground(): Boolean {
+        return ProcessLifecycleOwner.get().lifecycle.currentState
+            .isAtLeast(Lifecycle.State.RESUMED)
+    }
+
+    /**
+     * Whether a notification for [sessionId] should be suppressed. A notification is
+     * only suppressed when the user is already looking at *that exact* chat session
+     * (the in-app sheet handles the case). When the app is in the foreground but
+     * the user is on a different chat — or on the workspace list / settings — the
+     * notification still fires so the user doesn't miss input requests on background
+     * sessions.
+     */
+    private fun shouldSuppressForSession(sessionId: String): Boolean {
+        if (!isAppForeground()) return false
+        return com.tamimarafat.ferngeist.feature.chat.CurrentChatTracker
+            .focusedSessionId.value == sessionId
+    }
+
+    private fun handlePermissionEvent(tagged: TaggedPermissionEvent) {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        val notificationId = PERMISSION_NOTIFICATION_ID_BASE + tagged.event.toolCallId.hashCode()
+        when (val event = tagged.event) {
+            is PermissionFlowEvent.Requested -> {
+                if (shouldSuppressForSession(event.sessionId)) {
+                    // The user is on the chat for that session; the in-app
+                    // PermissionRequestSheet handles this — don't double up.
+                    return
+                }
+                val notification = buildPermissionNotification(
+                    serverId = tagged.serverId,
+                    event = event,
+                    notificationId = notificationId,
+                )
+                nm.notify(notificationId, notification)
+            }
+            is PermissionFlowEvent.Resolved -> {
+                nm.cancel(notificationId)
+            }
+        }
+    }
+
+    private fun buildPermissionNotification(
+        serverId: String,
+        event: PermissionFlowEvent.Requested,
+        notificationId: Int,
+    ): Notification {
+        val agentName = connectionRegistry.existingConnectionFor(serverId)
+            ?.let { it.currentConnectionConfig()?.serverDisplayName ?: it.agentInfo.value?.name }
+            ?: "Agent"
+
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            notificationId,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val builder = NotificationCompat.Builder(this, INPUT_REQUIRED_CHANNEL_ID)
+            .setContentTitle("$agentName needs input")
+            .setContentText(event.title)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(event.title))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+
+        // Up to 3 inline action buttons: lock-screen / collapsed shows these. Beyond 3,
+        // the rest are still reachable by expanding the notification (BigText) — and we
+        // always include a Deny fallback that's distinct from the option list.
+        val maxInlineOptions = 3
+        event.options.take(maxInlineOptions).forEach { option ->
+            val intent = Intent(this, PermissionActionReceiver::class.java).apply {
+                action = PermissionActionReceiver.ACTION_GRANT
+                putExtra(PermissionActionReceiver.EXTRA_SERVER_ID, serverId)
+                putExtra(PermissionActionReceiver.EXTRA_SESSION_ID, event.sessionId)
+                putExtra(PermissionActionReceiver.EXTRA_TOOL_CALL_ID, event.toolCallId)
+                putExtra(PermissionActionReceiver.EXTRA_OPTION_ID, option.id)
+                putExtra(PermissionActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            }
+            val pi = PendingIntent.getBroadcast(
+                this,
+                notificationId * 16 + option.id.hashCode().and(0x0F),
+                intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            builder.addAction(0, option.label, pi)
+        }
+
+        // Deny is always present, last.
+        val denyIntent = Intent(this, PermissionActionReceiver::class.java).apply {
+            action = PermissionActionReceiver.ACTION_DENY
+            putExtra(PermissionActionReceiver.EXTRA_SERVER_ID, serverId)
+            putExtra(PermissionActionReceiver.EXTRA_SESSION_ID, event.sessionId)
+            putExtra(PermissionActionReceiver.EXTRA_TOOL_CALL_ID, event.toolCallId)
+            putExtra(PermissionActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val denyPi = PendingIntent.getBroadcast(
+            this,
+            notificationId * 16 + 15,
+            denyIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        builder.addAction(0, "Deny", denyPi)
+
+        return builder.build()
+    }
+
+    private fun createInputRequiredChannel() {
+        val channel = NotificationChannel(
+            INPUT_REQUIRED_CHANNEL_ID,
+            getString(R.string.notification_channel_input_required_name),
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = getString(R.string.notification_channel_input_required_description)
+        }
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.createNotificationChannel(channel)
+    }
+
+    private fun createTurnCompleteChannel() {
+        val channel = NotificationChannel(
+            TURN_COMPLETE_CHANNEL_ID,
+            getString(R.string.notification_channel_turn_complete_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = getString(R.string.notification_channel_turn_complete_description)
+        }
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.createNotificationChannel(channel)
+    }
+
+    private fun updateNotification(states: Map<String, AcpConnectionState>) {
         if (!isStarted) return
-        val notification = buildNotification(state, connectionManager.agentInfo.value?.name)
+        val notification = buildNotification(states)
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, notification)
     }
 
-    private fun buildNotification(state: AcpConnectionState, agentName: String?): Notification {
-        val displayName = connectionManager.currentConnectionConfig()?.serverDisplayName ?: agentName
-        val (title, text) = when (state) {
-            is AcpConnectionState.Connected ->
+    private fun buildNotification(states: Map<String, AcpConnectionState>): Notification {
+        val connectedServerIds = states.entries
+            .filter { it.value is AcpConnectionState.Connected }
+            .map { it.key }
+        val connecting = states.values.any { it is AcpConnectionState.Connecting }
+        val failed = states.values.firstOrNull { it is AcpConnectionState.Failed } as? AcpConnectionState.Failed
+
+        val (title, text) = when {
+            connectedServerIds.isNotEmpty() -> {
+                val displayNames = connectedServerIds.mapNotNull { id ->
+                    val mgr = connectionRegistry.existingConnectionFor(id)
+                    mgr?.currentConnectionConfig()?.serverDisplayName ?: mgr?.agentInfo?.value?.name
+                }
+                val label = when (displayNames.size) {
+                    0 -> "agent"
+                    1 -> displayNames[0]
+                    else -> "${displayNames.size} agents"
+                }
                 getString(R.string.notification_connected_title) to
-                    getString(R.string.notification_connected_text, displayName ?: "agent")
-            is AcpConnectionState.Connecting ->
+                    getString(R.string.notification_connected_text, label)
+            }
+            connecting -> {
                 getString(R.string.notification_connecting_title) to
                     getString(R.string.notification_connecting_text)
-            is AcpConnectionState.Failed ->
+            }
+            failed != null -> {
                 getString(R.string.notification_failed_title) to
-                    (state.error.message ?: getString(R.string.notification_failed_text))
-            is AcpConnectionState.Disconnected ->
+                    (failed.error.message ?: getString(R.string.notification_failed_text))
+            }
+            else -> {
                 getString(R.string.notification_disconnected_title) to
                     getString(R.string.notification_disconnected_text)
+            }
         }
 
         val contentIntent = PendingIntent.getActivity(

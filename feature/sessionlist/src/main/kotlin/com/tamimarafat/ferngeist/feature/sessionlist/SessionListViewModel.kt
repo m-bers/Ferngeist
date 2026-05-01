@@ -6,7 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpAuthMethodInfo
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpAuthenticateResult
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpAuthenticationRequiredException
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpAgentCapabilities
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionConfig
@@ -67,13 +67,15 @@ class SessionListViewModel @Inject constructor(
     private val helperSourceRepository: DesktopHelperSourceRepository,
     private val launchableTargetRepository: LaunchableTargetRepository,
     private val sessionRepository: SessionRepository,
-    private val connectionManager: AcpConnectionManager,
+    connectionRegistry: AcpConnectionRegistry,
     private val helperRepository: DesktopHelperRepository,
     private val authEnvValueStore: AuthEnvValueStore,
     private val sessionSettingsRepository: LaunchableTargetSessionSettingsRepository,
 ) : ViewModel() {
 
     val serverId: String = savedStateHandle.get<String>("serverId") ?: ""
+
+    private val connectionManager = connectionRegistry.connectionFor(serverId)
 
     val server: StateFlow<LaunchableTarget?> = launchableTargetRepository.getTargets()
         .map { servers -> servers.find { it.id == serverId } }

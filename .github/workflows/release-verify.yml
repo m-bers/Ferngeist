@@ -1,0 +1,59 @@
+name: Release build verification
+
+# Verifies the release variant compiles and shrinks cleanly. The APK is
+# *unsigned* (we don't have signing secrets configured for this fork yet)
+# and is uploaded only as a verification artifact — not for distribution.
+
+on:
+  push:
+    branches:
+      - "ci/temp-apk-build"
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  release-apk:
+    name: Unsigned release APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x ./gradlew
+      - name: Assemble release (unsigned)
+        run: ./gradlew :app:assembleRelease
+      - name: Upload unsigned release APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferngeist-release-unsigned-${{ github.sha }}
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+
+  release-bundle:
+    name: Release App Bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x ./gradlew
+      - name: Bundle release (unsigned)
+        run: ./gradlew :app:bundleRelease
+      - name: Upload AAB
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferngeist-release-bundle-${{ github.sha }}
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: warn

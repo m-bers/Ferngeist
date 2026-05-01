@@ -37,6 +37,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -695,12 +696,23 @@ fun ChatScreen(
     var showCommandsDialog by remember { mutableStateOf(false) }
     var showConnectionStatusDialog by remember { mutableStateOf(false) }
     var composerContentHeightPx by remember { mutableIntStateOf(0) }
-    var messageText by remember { mutableStateOf("") }
+    var messageText by remember { mutableStateOf(viewModel.restoreDraft()) }
+    androidx.compose.runtime.LaunchedEffect(messageText) {
+        viewModel.persistDraft(messageText)
+    }
     var composerExpanded by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    androidx.compose.runtime.DisposableEffect(sessionId) {
+        com.tamimarafat.ferngeist.feature.chat.CurrentChatTracker.setFocused(sessionId)
+        onDispose {
+            com.tamimarafat.ferngeist.feature.chat.CurrentChatTracker.clearFocused(sessionId)
+        }
+    }
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val navBottomPx = WindowInsets.navigationBars.getBottom(density)
     val systemBottomInsetPx = if (imeBottomPx > navBottomPx) imeBottomPx else navBottomPx
@@ -864,9 +876,37 @@ fun ChatScreen(
                         sessionId = sessionId,
                         sessionTitle = sessionTitle,
                         activeModel = activeModel,
+                        agentName = state.agentName,
                         connectionState = state.connectionState,
                         onNavigateBack = onNavigateBack,
                         onConnectionStatusClick = { showConnectionStatusDialog = true },
+                        onShareAsMarkdown = {
+                            val markdown = com.tamimarafat.ferngeist.feature.chat.ThreadMarkdown.render(
+                                messages = state.messages,
+                                sessionTitle = sessionTitle,
+                            )
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/markdown"
+                                putExtra(android.content.Intent.EXTRA_TEXT, markdown)
+                                putExtra(android.content.Intent.EXTRA_TITLE, sessionTitle)
+                            }
+                            val chooser = android.content.Intent.createChooser(intent, "Share thread")
+                            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(chooser)
+                        },
+                        onCopyAsMarkdown = {
+                            val markdown = com.tamimarafat.ferngeist.feature.chat.ThreadMarkdown.render(
+                                messages = state.messages,
+                                sessionTitle = sessionTitle,
+                            )
+                            val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                            cm?.setPrimaryClip(
+                                android.content.ClipData.newPlainText(sessionTitle, markdown),
+                            )
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Thread copied as Markdown")
+                            }
+                        },
                         sharedTransitionScope = sharedTransitionScope,
                         animatedContentScope = animatedContentScope,
                     )
@@ -930,6 +970,15 @@ fun ChatScreen(
                         onToolCallClick = { segmentId ->
                             selectedToolCallSegmentId = segmentId
                         },
+                        onUserMessageReuse = { content ->
+                            // Tap a previous user message to copy it back into the
+                            // composer for a quick re-send / edit. Mirrors Zed's
+                            // edit-and-resubmit affordance (the message stays in the
+                            // history; the new send appends rather than rewinds).
+                            messageText = content
+                            composerExpanded = true
+                            focusRequester.requestFocus()
+                        },
                     )
 
                     SnackbarHost(
@@ -939,6 +988,32 @@ fun ChatScreen(
                             .padding(start = 16.dp, end = 16.dp, bottom = snackbarBottomPadding)
                             .zIndex(2f)
                     )
+
+                    if (showComposerToolbar && state.queuedMessages.isNotEmpty()) {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
+                                .imePadding()
+                                .padding(bottom = composerContentHeightDp + 16.dp)
+                                .zIndex(1f),
+                            shape = MaterialTheme.shapes.large,
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                            shadowElevation = 4.dp,
+                            onClick = { viewModel.dispatch(ChatIntent.ClearQueuedMessages) },
+                        ) {
+                            Text(
+                                text = if (state.queuedMessages.size == 1) {
+                                    "1 queued — tap to clear"
+                                } else {
+                                    "${state.queuedMessages.size} queued — tap to clear"
+                                },
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
 
                     if (showComposerToolbar) {
                         ChatComposerBar(
@@ -1009,9 +1084,12 @@ private fun ChatTopBar(
     sessionId: String,
     sessionTitle: String,
     activeModel: String?,
+    agentName: String?,
     connectionState: AcpConnectionState,
     onNavigateBack: () -> Unit,
     onConnectionStatusClick: () -> Unit,
+    onShareAsMarkdown: () -> Unit,
+    onCopyAsMarkdown: () -> Unit,
     sharedTransitionScope: SharedTransitionScope,
     animatedContentScope: AnimatedContentScope,
 ) {
@@ -1034,13 +1112,17 @@ private fun ChatTopBar(
                     ),
                 )
             }
-            activeModel?.takeIf { it.isNotBlank() }?.let { model ->
+            val subtitleParts = listOfNotNull(
+                agentName?.takeIf { it.isNotBlank() },
+                activeModel?.takeIf { it.isNotBlank() },
+            )
+            if (subtitleParts.isNotEmpty()) {
                 Text(
-                    text = model,
+                    text = subtitleParts.joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -1051,6 +1133,34 @@ private fun ChatTopBar(
             )
         }
     }, actions = {
+        var menuOpen by remember { mutableStateOf(false) }
+        Box {
+            androidx.compose.material3.IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    imageVector = Icons.Outlined.MoreVert,
+                    contentDescription = "Thread menu",
+                )
+            }
+            androidx.compose.material3.DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Open as Markdown") },
+                    onClick = {
+                        menuOpen = false
+                        onShareAsMarkdown()
+                    },
+                )
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Copy as Markdown") },
+                    onClick = {
+                        menuOpen = false
+                        onCopyAsMarkdown()
+                    },
+                )
+            }
+        }
         val connectionLabel = connectionStateLabel(connectionState)
         TooltipBox(
             positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),

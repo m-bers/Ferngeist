@@ -52,6 +52,25 @@ class AcpConnectionManager(
     private val _events = MutableSharedFlow<AcpManagerEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<AcpManagerEvent> = _events.asSharedFlow()
 
+    /**
+     * Per-server stream of permission lifecycle events. Subscribers (e.g. the foreground
+     * service for rich Android notifications) can listen here to know when an agent on
+     * this server requests user input, and when the request gets resolved (regardless of
+     * whether the answer came from the in-app sheet or a notification action).
+     */
+    private val _permissionEvents = MutableSharedFlow<PermissionFlowEvent>(extraBufferCapacity = 64)
+    val permissionEvents: SharedFlow<PermissionFlowEvent> = _permissionEvents.asSharedFlow()
+
+    /**
+     * Per-server stream of turn-completion events. Subscribers (e.g. notification
+     * surfaces) listen to know when the agent finished a turn and is awaiting the
+     * user's next prompt. [TurnCompleteEvent.summary] is the trailing snippet of
+     * the agent's last assistant message (so a notification can preview what the
+     * agent said before going idle).
+     */
+    private val _turnCompleteEvents = MutableSharedFlow<TurnCompleteEvent>(extraBufferCapacity = 32)
+    val turnCompleteEvents: SharedFlow<TurnCompleteEvent> = _turnCompleteEvents.asSharedFlow()
+
     private val _agentCapabilities = MutableStateFlow<AcpAgentCapabilities?>(null)
     val agentCapabilities: StateFlow<AcpAgentCapabilities?> = _agentCapabilities.asStateFlow()
 
@@ -222,32 +241,51 @@ class AcpConnectionManager(
             blocks += ContentBlock.Image(data = data, mimeType = mimeType)
         }
 
-        var receivedPromptResponse = false
-        session.prompt(blocks).collect { event ->
-            when (event) {
-                is Event.SessionUpdateEvent -> {
-                    val appEvent = AcpSessionUpdateMapper.mapSessionUpdateToEvent(event.update)
-                    if (appEvent != null) {
-                        bridge.emitEvent(appEvent)
+        // Detach the prompt-collection from the caller's coroutine scope. The caller
+        // is ChatViewModel.viewModelScope; if the user navigates to a different chat,
+        // viewModelScope is cancelled, which would otherwise propagate as cancellation
+        // of session.prompt() and tear down the agent's turn server-side. The prompt
+        // must outlive the UI scope and stay attached to the connection manager.
+        scope.launch {
+            var receivedPromptResponse = false
+            try {
+                session.prompt(blocks).collect { event ->
+                    when (event) {
+                        is Event.SessionUpdateEvent -> {
+                            val appEvent = AcpSessionUpdateMapper.mapSessionUpdateToEvent(event.update)
+                            if (appEvent != null) {
+                                bridge.emitEvent(appEvent)
+                            }
+                        }
+                        is Event.PromptResponseEvent -> {
+                            receivedPromptResponse = true
+                            bridge.emitEvent(
+                                AppSessionEvent.TurnComplete(AcpSessionUpdateMapper.mapStopReason(event.response.stopReason))
+                            )
+                            _turnCompleteEvents.emit(
+                                TurnCompleteEvent(
+                                    sessionId = sessionId,
+                                    stopReason = AcpSessionUpdateMapper.mapStopReason(event.response.stopReason),
+                                )
+                            )
+                        }
                     }
                 }
-                is Event.PromptResponseEvent -> {
-                    receivedPromptResponse = true
-                    bridge.emitEvent(
-                        AppSessionEvent.TurnComplete(AcpSessionUpdateMapper.mapStopReason(event.response.stopReason))
-                    )
+
+                // Defensive fallback: some servers/bridges can finish the prompt stream without
+                // emitting a terminal PromptResponseEvent. Ensure the UI exits streaming state.
+                if (!receivedPromptResponse) {
+                    bridge.emitEvent(AppSessionEvent.TurnComplete("end_turn"))
+                }
+            } catch (t: Throwable) {
+                val message = formatAcpErrorMessage(t, "Prompt failed")
+                diagnosticsStore.appendError("session/prompt", message)
+                bridge.emitEvent(AppSessionEvent.PromptError(message))
+                if (!receivedPromptResponse) {
+                    bridge.emitEvent(AppSessionEvent.TurnComplete("end_turn"))
                 }
             }
         }
-
-        // Defensive fallback: some servers/bridges can finish the prompt stream without
-        // emitting a terminal PromptResponseEvent. Ensure the UI exits streaming state.
-        if (!receivedPromptResponse) {
-            bridge.emitEvent(AppSessionEvent.TurnComplete("end_turn"))
-        }
-
-        // keep bridge referenced to avoid warning; calls rely on bridge events
-        bridge.sessionId
     }
 
     suspend fun cancelSession(sessionId: String) {
@@ -305,12 +343,14 @@ class AcpConnectionManager(
         val pending = sessionRegistry.takePendingPermissionRequest(toolCallId) ?: return
         pending.deferred.complete(RequestPermissionOutcome.Selected(PermissionOptionId(optionId)))
         emitToBridge(sessionId, AppSessionEvent.ToolPermissionResolved(toolCallId))
+        _permissionEvents.emit(PermissionFlowEvent.Resolved(sessionId, toolCallId))
     }
 
     suspend fun respondPermissionCancelled(sessionId: String, toolCallId: String) {
         val pending = sessionRegistry.takePendingPermissionRequest(toolCallId) ?: return
         pending.deferred.complete(RequestPermissionOutcome.Cancelled)
         emitToBridge(sessionId, AppSessionEvent.ToolPermissionResolved(toolCallId))
+        _permissionEvents.emit(PermissionFlowEvent.Resolved(sessionId, toolCallId))
     }
 
     fun getSession(sessionId: String): SessionBridge? = sessionRegistry.getBridge(sessionId)
@@ -358,6 +398,18 @@ class AcpConnectionManager(
                     requestId = toolId,
                     title = toolCall.title,
                     options = options
+                )
+            )
+
+            // Mirror to the per-server permission stream so notification surfaces (and other
+            // out-of-chat consumers) can post a user-facing prompt without the chat being open.
+            _permissionEvents.emit(
+                PermissionFlowEvent.Requested(
+                    sessionId = sessionId,
+                    toolCallId = toolId,
+                    title = toolCall.title?.takeIf { it.isNotBlank() } ?: "Permission Request",
+                    toolKind = toolCall.kind?.toString()?.lowercase(),
+                    options = options,
                 )
             )
 
@@ -558,3 +610,33 @@ sealed interface AcpManagerEvent {
     data class Authenticated(val methodId: String) : AcpManagerEvent
     data class Error(val throwable: Throwable) : AcpManagerEvent
 }
+
+/**
+ * Emitted by [AcpConnectionManager.permissionEvents] whenever an agent on this server requests
+ * user input (a tool-call approval, a plan-stage multiple-choice, etc.) and when that request is
+ * subsequently resolved. Subscribers (notification UI, foreground services) use these to surface
+ * the prompt outside of the chat screen.
+ */
+sealed interface PermissionFlowEvent {
+    val sessionId: String
+    val toolCallId: String
+
+    data class Requested(
+        override val sessionId: String,
+        override val toolCallId: String,
+        val title: String,
+        val toolKind: String?,
+        val options: List<SessionPermissionOption>,
+    ) : PermissionFlowEvent
+
+    data class Resolved(
+        override val sessionId: String,
+        override val toolCallId: String,
+    ) : PermissionFlowEvent
+}
+
+/** Fires when an agent finishes a turn and is awaiting the user's next prompt. */
+data class TurnCompleteEvent(
+    val sessionId: String,
+    val stopReason: String,
+)

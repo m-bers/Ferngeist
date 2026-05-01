@@ -2,7 +2,7 @@ package com.tamimarafat.ferngeist.feature.chat
 
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.ConnectivityObserver
 import com.tamimarafat.ferngeist.acp.bridge.session.SessionConfigValue
 import com.tamimarafat.ferngeist.core.model.LaunchableTarget
@@ -12,6 +12,8 @@ import com.tamimarafat.ferngeist.core.model.repository.DesktopHelperSourceReposi
 import com.tamimarafat.ferngeist.core.model.repository.LaunchableTargetRepository
 import com.tamimarafat.ferngeist.core.model.repository.LaunchableTargetSessionSettingsRepository
 import com.tamimarafat.ferngeist.core.model.repository.SessionRepository
+import com.tamimarafat.ferngeist.core.model.repository.WorkspaceRepository
+import com.tamimarafat.ferngeist.core.model.Workspace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -124,12 +126,13 @@ class ChatViewModelTest {
         chatScrollStateStore: ChatScrollStateStore = InMemoryChatScrollStateStore(),
     ): ChatViewModel {
         val connectivityObserver = ConnectivityObserverStub(initialState = false)
-        val manager = AcpConnectionManager(
-            connectivityObserver = connectivityObserver,
-            scope = CoroutineScope(Dispatchers.Main),
+        val registry = AcpConnectionRegistry(
+            connectivityObserverFactory = { connectivityObserver },
+            parentScope = CoroutineScope(Dispatchers.Main),
         )
         val targetRepository = FakeLaunchableTargetRepository()
         val sessionRepository = FakeSessionRepository()
+        val workspaceRepository = FakeWorkspaceRepository()
         val handle = SavedStateHandle(
             mapOf(
                 "serverId" to "server_1",
@@ -139,12 +142,14 @@ class ChatViewModelTest {
         )
 
         return ChatViewModel(
-            connectionManager = manager,
+            connectionRegistry = registry,
             helperSourceRepository = FakeDesktopHelperSourceRepository(),
             launchableTargetRepository = targetRepository,
             sessionRepository = sessionRepository,
+            workspaceRepository = workspaceRepository,
             helperRepository = FakeDesktopHelperRepository(),
             chatScrollStateStore = chatScrollStateStore,
+            chatDraftStore = InMemoryChatDraftStore(),
             savedStateHandle = handle,
         )
     }
@@ -187,9 +192,28 @@ private class FakeDesktopHelperSourceRepository : DesktopHelperSourceRepository 
 
 private class FakeSessionRepository : SessionRepository {
     override fun getSessions(serverId: String): Flow<List<SessionSummary>> = emptyFlow()
+    override fun getSessionsForWorkspace(workspaceId: String): Flow<List<SessionSummary>> = emptyFlow()
+    override fun getArchivedSessionsForWorkspace(workspaceId: String): Flow<List<SessionSummary>> = emptyFlow()
+    override fun getAllArchivedSessions(): Flow<List<SessionSummary>> = emptyFlow()
     override suspend fun upsertSession(serverId: String, summary: SessionSummary) = Unit
+    override suspend fun upsertSession(serverId: String, workspaceId: String?, summary: SessionSummary) = Unit
+    override suspend fun archiveSession(sessionId: String) = Unit
+    override suspend fun unarchiveSession(sessionId: String) = Unit
     override suspend fun deleteSession(serverId: String, sessionId: String) = Unit
     override suspend fun clearSessions(serverId: String) = Unit
+}
+
+private class FakeWorkspaceRepository : WorkspaceRepository {
+    override fun getAllWorkspaces(): Flow<List<Workspace>> = emptyFlow()
+    override suspend fun findByKey(helperKey: String, cwd: String): Workspace? = null
+    override suspend fun getById(id: String): Workspace? = null
+    override suspend fun findOrCreate(helperKey: String, cwd: String): Workspace =
+        Workspace(id = "$helperKey|$cwd", helperKey = helperKey, cwd = cwd, displayName = null, createdAt = 0L, updatedAt = 0L)
+    override suspend fun helperKeyForServer(serverId: String): String? = null
+    override suspend fun findOrCreateForServer(serverId: String, cwd: String): Workspace? = null
+    override suspend fun rename(workspaceId: String, displayName: String?) = Unit
+    override suspend fun touch(workspaceId: String) = Unit
+    override suspend fun delete(workspaceId: String, cascadeSessions: Boolean) = Unit
 }
 
 private class FakeDesktopHelperRepository : com.tamimarafat.ferngeist.feature.serverlist.helper.DesktopHelperRepository {
@@ -219,4 +243,14 @@ private class InMemoryChatScrollStateStore : ChatScrollStateStore {
     override fun clear(serverId: String, sessionId: String) {
         entries.remove(serverId to sessionId)
     }
+}
+
+private class InMemoryChatDraftStore : ChatDraftStore {
+    private val drafts = linkedMapOf<Pair<String, String>, String>()
+    override fun restore(serverId: String, sessionId: String): String? = drafts[serverId to sessionId]
+    override fun save(serverId: String, sessionId: String, draft: String) {
+        if (draft.isEmpty()) drafts.remove(serverId to sessionId)
+        else drafts[serverId to sessionId] = draft
+    }
+    override fun clear(serverId: String, sessionId: String) { drafts.remove(serverId to sessionId) }
 }

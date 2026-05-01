@@ -7,7 +7,7 @@ import com.tamimarafat.ferngeist.feature.chat.BuildConfig
 import com.mikepenz.markdown.model.State as MarkdownRenderState
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpAgentCapabilities
 import com.tamimarafat.ferngeist.acp.bridge.connection.ConnectionDiagnostics
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
 import com.tamimarafat.ferngeist.acp.bridge.session.SessionConfigOption
 import com.tamimarafat.ferngeist.acp.bridge.session.SessionLoadState
@@ -20,6 +20,7 @@ import com.tamimarafat.ferngeist.core.model.SessionSummary
 import com.tamimarafat.ferngeist.core.model.repository.DesktopHelperSourceRepository
 import com.tamimarafat.ferngeist.core.model.repository.LaunchableTargetRepository
 import com.tamimarafat.ferngeist.core.model.repository.SessionRepository
+import com.tamimarafat.ferngeist.core.model.repository.WorkspaceRepository
 import com.tamimarafat.ferngeist.feature.serverlist.helper.DesktopHelperRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
@@ -27,12 +28,14 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
-    private val connectionManager: AcpConnectionManager,
+    connectionRegistry: AcpConnectionRegistry,
     private val helperSourceRepository: DesktopHelperSourceRepository,
     private val launchableTargetRepository: LaunchableTargetRepository,
     private val sessionRepository: SessionRepository,
+    private val workspaceRepository: WorkspaceRepository,
     private val helperRepository: DesktopHelperRepository,
     private val chatScrollStateStore: ChatScrollStateStore,
+    private val chatDraftStore: ChatDraftStore,
     savedStateHandle: SavedStateHandle,
 ) : MviViewModel<ChatState, ChatIntent, ChatEffect>(
     initialState(savedStateHandle, chatScrollStateStore)
@@ -60,6 +63,8 @@ class ChatViewModel @Inject constructor(
     private val sessionId: String = savedStateHandle["sessionId"] ?: error("sessionId is required")
     private val cwd: String = savedStateHandle["cwd"] ?: "/"
     private val sessionUpdatedAt: Long? = savedStateHandle.get<Long>("updatedAt")?.takeIf { it > 0L }
+    private val workspaceId: String? = savedStateHandle.get<String>("workspaceId")?.takeIf { it.isNotBlank() }
+    private val connectionManager = connectionRegistry.connectionFor(serverId)
     private val markdownStateStore = MarkdownStateStore(
         scope = viewModelScope,
         currentMessages = { state.value.messages },
@@ -114,12 +119,19 @@ class ChatViewModel @Inject constructor(
             }
 
             override suspend fun onSessionStored(sessionId: String, cwd: String, updatedAt: Long) {
+                // If the navigation graph passed an explicit workspaceId, use it. Otherwise
+                // derive one from (serverId, cwd) via the WorkspaceRepository so the session
+                // ends up in *some* workspace and shows up in the new IA.
+                val resolvedWorkspaceId = workspaceId
+                    ?: workspaceRepository.findOrCreateForServer(serverId, cwd)?.id
                 sessionRepository.upsertSession(
                     serverId = serverId,
+                    workspaceId = resolvedWorkspaceId,
                     summary = SessionSummary(
                         id = sessionId,
                         cwd = cwd,
                         updatedAt = updatedAt,
+                        serverId = serverId,
                     ),
                 )
             }
@@ -168,6 +180,19 @@ class ChatViewModel @Inject constructor(
                     )
                 }
             }
+
+            override suspend fun onTurnComplete() {
+                // Pop the next queued message (if any) and dispatch it. Mirrors Zed's
+                // "queued-during-generation" behavior: messages submitted while the
+                // agent was still working are sent at the next turn boundary.
+                val pending = state.value.queuedMessages.firstOrNull() ?: return
+                updateState { copy(queuedMessages = queuedMessages.drop(1)) }
+                // Route through dispatch so this lambda doesn't reference
+                // sessionCoordinator (which is still being initialized at type-check
+                // time, causing a recursive type-inference error). DispatchQueued is
+                // handled by handleIntent below and bypasses the streaming-queue check.
+                dispatch(ChatIntent.DispatchQueuedMessage(pending.text, pending.images))
+            }
         },
     )
 
@@ -202,6 +227,11 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             connectionManager.diagnostics.collect { diagnostics ->
                 updateState { copy(connectionDiagnostics = diagnostics) }
+            }
+        }
+        viewModelScope.launch {
+            connectionManager.agentInfo.collect { info ->
+                updateState { copy(agentName = info?.name) }
             }
         }
     }
@@ -254,12 +284,42 @@ class ChatViewModel @Inject constructor(
 
     override suspend fun handleIntent(intent: ChatIntent) {
         when (intent) {
-            is ChatIntent.SendMessage -> sessionCoordinator.sendMessage(intent.text, intent.images)
+            is ChatIntent.SendMessage -> {
+                if (state.value.isStreaming) {
+                    // Zed-parity message queueing: a new prompt submitted while the
+                    // agent is still generating is queued and dispatched at the next
+                    // turn boundary (see onTurnComplete callback).
+                    updateState {
+                        copy(
+                            queuedMessages = queuedMessages +
+                                QueuedMessage(text = intent.text, images = intent.images),
+                        )
+                    }
+                } else {
+                    sessionCoordinator.sendMessage(intent.text, intent.images)
+                }
+            }
             is ChatIntent.CancelStreaming -> sessionCoordinator.cancelStreaming()
             is ChatIntent.SetConfigOption -> sessionCoordinator.setConfigOption(intent.optionId, intent.value)
             is ChatIntent.GrantPermission -> sessionCoordinator.grantPermission(intent.toolCallId, intent.optionId)
             is ChatIntent.DenyPermission -> sessionCoordinator.denyPermission(intent.toolCallId)
             is ChatIntent.RetryLoad -> sessionCoordinator.loadSession()
+            is ChatIntent.RemoveQueuedMessage -> {
+                updateState {
+                    val next = queuedMessages.toMutableList().apply {
+                        removeAll { it.id == intent.id }
+                    }
+                    copy(queuedMessages = next)
+                }
+            }
+            ChatIntent.ClearQueuedMessages -> {
+                updateState { copy(queuedMessages = emptyList()) }
+            }
+            is ChatIntent.DispatchQueuedMessage -> {
+                // Bypasses the streaming-queue gate; used internally by onTurnComplete
+                // to flush the next queued user message at a turn boundary.
+                sessionCoordinator.sendMessage(intent.text, intent.images)
+            }
         }
     }
 
@@ -270,6 +330,12 @@ class ChatViewModel @Inject constructor(
             else copy(restoredScrollSnapshot = snapshot)
         }
     }
+
+    fun persistDraft(draft: String) {
+        chatDraftStore.save(serverId, sessionId, draft)
+    }
+
+    fun restoreDraft(): String = chatDraftStore.restore(serverId, sessionId).orEmpty()
 
     private fun trace(message: String) {
         if (!BuildConfig.DEBUG) return
@@ -303,7 +369,16 @@ data class ChatState(
     val commandsAdvertised: Boolean = false,
     val canSendImages: Boolean = false,
     val supportsEmbeddedContext: Boolean = false,
+    val queuedMessages: List<QueuedMessage> = emptyList(),
+    val agentName: String? = null,
     val error: String? = null,
+)
+
+/** A user message awaiting dispatch at the next turn boundary. */
+data class QueuedMessage(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val text: String,
+    val images: List<ChatImageData> = emptyList(),
 )
 
 data class UsageState(
@@ -322,6 +397,10 @@ sealed interface ChatIntent {
     data class GrantPermission(val toolCallId: String, val optionId: String) : ChatIntent
     data class DenyPermission(val toolCallId: String) : ChatIntent
     data object RetryLoad : ChatIntent
+    data class RemoveQueuedMessage(val id: String) : ChatIntent
+    data object ClearQueuedMessages : ChatIntent
+    /** Internal: dispatches a previously-queued message at a turn boundary. */
+    data class DispatchQueuedMessage(val text: String, val images: List<ChatImageData> = emptyList()) : ChatIntent
 }
 
 sealed interface ChatEffect {

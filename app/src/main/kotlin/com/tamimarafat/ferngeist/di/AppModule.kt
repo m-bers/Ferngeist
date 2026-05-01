@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AndroidConnectivityObserver
 import com.tamimarafat.ferngeist.core.model.repository.DesktopHelperSourceRepository
 import com.tamimarafat.ferngeist.core.model.repository.HelperAgentBindingRepository
@@ -12,6 +12,7 @@ import com.tamimarafat.ferngeist.core.model.repository.LaunchableTargetRepositor
 import com.tamimarafat.ferngeist.core.model.repository.LaunchableTargetSessionSettingsRepository
 import com.tamimarafat.ferngeist.core.model.repository.ServerRepository
 import com.tamimarafat.ferngeist.core.model.repository.SessionRepository
+import com.tamimarafat.ferngeist.core.model.repository.WorkspaceRepository
 import com.tamimarafat.ferngeist.data.database.FerngeistDatabase
 import com.tamimarafat.ferngeist.data.database.crypto.CredentialEncryptor
 import com.tamimarafat.ferngeist.data.database.repository.DesktopHelperSourceRepositoryImpl
@@ -20,6 +21,7 @@ import com.tamimarafat.ferngeist.data.database.repository.LaunchableTargetReposi
 import com.tamimarafat.ferngeist.data.database.repository.LaunchableTargetSessionSettingsRepositoryImpl
 import com.tamimarafat.ferngeist.data.database.repository.ServerRepositoryImpl
 import com.tamimarafat.ferngeist.data.database.repository.SessionRepositoryImpl
+import com.tamimarafat.ferngeist.data.database.repository.WorkspaceRepositoryImpl
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -27,9 +29,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import javax.inject.Singleton
 
@@ -44,7 +43,7 @@ object AppModule {
             context,
             FerngeistDatabase::class.java,
             FerngeistDatabase.DATABASE_NAME,
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13).build()
     }
     
     @Provides
@@ -90,6 +89,17 @@ object AppModule {
     fun provideLaunchableTargetSessionSettingsRepository(database: FerngeistDatabase): LaunchableTargetSessionSettingsRepository {
         return LaunchableTargetSessionSettingsRepositoryImpl(database.launchableTargetSessionSettingsDao())
     }
+
+    @Provides
+    @Singleton
+    fun provideWorkspaceRepository(database: FerngeistDatabase): WorkspaceRepository {
+        return WorkspaceRepositoryImpl(
+            workspaceDao = database.workspaceDao(),
+            helperAgentBindingDao = database.helperAgentBindingDao(),
+            serverDao = database.serverDao(),
+            sessionDao = database.sessionDao(),
+        )
+    }
     
     @Provides
     @Singleton
@@ -99,10 +109,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideAcpConnectionManager(@ApplicationContext context: Context): AcpConnectionManager {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        val connectivityObserver = AndroidConnectivityObserver(context)
-        return AcpConnectionManager(connectivityObserver, scope)
+    fun provideAcpConnectionRegistry(@ApplicationContext context: Context): AcpConnectionRegistry {
+        return AcpConnectionRegistry(
+            connectivityObserverFactory = { AndroidConnectivityObserver(context) },
+        )
     }
 
     @Provides
@@ -426,6 +436,132 @@ private val MIGRATION_10_11 = object : Migration(10, 11) {
         // which point CredentialEncryptor.encrypt() rewrites them to EncryptedSharedPreferences.
         // Users who never edit a saved server after this migration will retain plaintext
         // credentials in the database backup.
+    }
+}
+
+/**
+ * v11 → v12: Introduce Workspace as the top-level grouping concept (parity with Zed's
+ * threads-sidebar IA). Sessions gain a nullable `workspaceId` column. Existing sessions
+ * are bucketed by `(helperKey, cwd)`:
+ *  - For helper-backed servers (rows in `helper_agent_bindings`): helperKey = the binding's
+ *    helperSourceId. Multiple agents on the same helper share a workspace at the same cwd.
+ *  - For manual servers (rows in `servers`): helperKey = "manual:<scheme>://<host>".
+ *  - For orphans (server rows already deleted but session row lingered): helperKey =
+ *    "orphan:<serverId>" so they land in a recoverable workspace rather than being lost.
+ *
+ * Workspace ids are deterministic: `helperKey || '|' || cwd`. This makes find-or-create
+ * idempotent without requiring UUID generation.
+ */
+private val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val now = System.currentTimeMillis()
+
+        // 1. Create the workspaces table with its (helperKey, cwd) unique index.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `workspaces` (
+              `workspaceId` TEXT NOT NULL,
+              `helperKey` TEXT NOT NULL,
+              `cwd` TEXT NOT NULL,
+              `displayName` TEXT,
+              `createdAt` INTEGER NOT NULL,
+              `updatedAt` INTEGER NOT NULL,
+              PRIMARY KEY(`workspaceId`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_workspaces_helperKey_cwd` " +
+                "ON `workspaces` (`helperKey`, `cwd`)"
+        )
+
+        // 2. Populate workspaces from distinct (helperKey, cwd) tuples derived from sessions.
+        //    For helper-backed sessions, helperKey comes from helper_agent_bindings;
+        //    for manual sessions, from servers; otherwise we synthesize an orphan key.
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO `workspaces`
+                (`workspaceId`, `helperKey`, `cwd`, `displayName`, `createdAt`, `updatedAt`)
+            SELECT
+                CASE
+                    WHEN h.`helperSourceId` IS NOT NULL
+                        THEN h.`helperSourceId` || '|' || COALESCE(s.`cwd`, '/')
+                    WHEN sv.`id` IS NOT NULL
+                        THEN 'manual:' || sv.`scheme` || '://' || sv.`host` || '|' || COALESCE(s.`cwd`, '/')
+                    ELSE
+                        'orphan:' || s.`serverId` || '|' || COALESCE(s.`cwd`, '/')
+                END AS `workspaceId`,
+                CASE
+                    WHEN h.`helperSourceId` IS NOT NULL THEN h.`helperSourceId`
+                    WHEN sv.`id` IS NOT NULL THEN 'manual:' || sv.`scheme` || '://' || sv.`host`
+                    ELSE 'orphan:' || s.`serverId`
+                END AS `helperKey`,
+                COALESCE(s.`cwd`, '/') AS `cwd`,
+                NULL AS `displayName`,
+                $now AS `createdAt`,
+                $now AS `updatedAt`
+            FROM `sessions` s
+            LEFT JOIN `helper_agent_bindings` h ON h.`id` = s.`serverId`
+            LEFT JOIN `servers` sv ON sv.`id` = s.`serverId`
+            GROUP BY `workspaceId`
+            """.trimIndent()
+        )
+
+        // 3. Rebuild `sessions` with a `workspaceId` column. SQLite doesn't support
+        //    ALTER TABLE ADD COLUMN ... DEFAULT (subquery), so we use the create-new-rename
+        //    dance to populate from a JOIN.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `sessions_new` (
+              `sessionId` TEXT NOT NULL,
+              `serverId` TEXT NOT NULL,
+              `workspaceId` TEXT,
+              `title` TEXT,
+              `cwd` TEXT,
+              `updatedAt` INTEGER,
+              PRIMARY KEY(`sessionId`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO `sessions_new`
+                (`sessionId`, `serverId`, `workspaceId`, `title`, `cwd`, `updatedAt`)
+            SELECT
+                s.`sessionId`,
+                s.`serverId`,
+                CASE
+                    WHEN h.`helperSourceId` IS NOT NULL
+                        THEN h.`helperSourceId` || '|' || COALESCE(s.`cwd`, '/')
+                    WHEN sv.`id` IS NOT NULL
+                        THEN 'manual:' || sv.`scheme` || '://' || sv.`host` || '|' || COALESCE(s.`cwd`, '/')
+                    ELSE
+                        'orphan:' || s.`serverId` || '|' || COALESCE(s.`cwd`, '/')
+                END AS `workspaceId`,
+                s.`title`,
+                s.`cwd`,
+                s.`updatedAt`
+            FROM `sessions` s
+            LEFT JOIN `helper_agent_bindings` h ON h.`id` = s.`serverId`
+            LEFT JOIN `servers` sv ON sv.`id` = s.`serverId`
+            """.trimIndent()
+        )
+        db.execSQL("DROP TABLE `sessions`")
+        db.execSQL("ALTER TABLE `sessions_new` RENAME TO `sessions`")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_sessions_serverId` ON `sessions` (`serverId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_sessions_workspaceId` ON `sessions` (`workspaceId`)")
+    }
+}
+
+/**
+ * v12 → v13: Add archive support to sessions (Zed-parity threads-history feature).
+ *  - `isArchived` (NOT NULL, default 0)
+ *  - `archivedAt` (NULL by default)
+ */
+private val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `sessions` ADD COLUMN `isArchived` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `sessions` ADD COLUMN `archivedAt` INTEGER")
     }
 }
 
