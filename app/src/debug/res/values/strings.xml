@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Ferngeist Debug</string>
+    <string name="notification_connected_title">Ferngeist Debug Connected</string>
+    <string name="notification_connecting_title">Ferngeist Debug Connecting</string>
+    <string name="notification_disconnected_title">Ferngeist Debug Disconnected</string>
+    <string name="notification_failed_title">Ferngeist Debug — Connection Failed</string>
+</resources>
