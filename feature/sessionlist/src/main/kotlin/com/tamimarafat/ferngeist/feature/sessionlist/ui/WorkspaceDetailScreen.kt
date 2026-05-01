@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -74,6 +75,7 @@ fun WorkspaceDetailScreen(
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var showArchived by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val ws = workspace
@@ -151,8 +153,14 @@ fun WorkspaceDetailScreen(
             }
         },
     ) { padding ->
-        val displayThreads = if (showArchived) archivedThreads else threads
-        if (displayThreads.isEmpty()) {
+        val sourceThreads = if (showArchived) archivedThreads else threads
+        val displayThreads = if (query.isBlank()) sourceThreads else sourceThreads.filter { thread ->
+            val q = query.trim()
+            (thread.title ?: "").contains(q, ignoreCase = true) ||
+                (thread.cwd ?: "").contains(q, ignoreCase = true) ||
+                (thread.agentName ?: "").contains(q, ignoreCase = true)
+        }
+        if (sourceThreads.isEmpty()) {
             EmptyThreadsState(
                 hasAgents = agents.isNotEmpty(),
                 isArchivedView = showArchived,
@@ -162,28 +170,54 @@ fun WorkspaceDetailScreen(
                     .padding(horizontal = 24.dp),
             )
         } else {
-            LazyColumn(
-                contentPadding = PaddingValues(
-                    top = padding.calculateTopPadding(),
-                    bottom = padding.calculateBottomPadding() + 24.dp,
-                    start = 16.dp,
-                    end = 16.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = padding.calculateTopPadding()),
             ) {
-                items(displayThreads, key = { it.sessionId }) { thread ->
-                    ThreadCard(
-                        thread = thread,
-                        connectionState = thread.serverId?.let { connectionStates[it] },
-                        isArchived = showArchived,
-                        onClick = {
-                            val serverId = thread.serverId ?: return@ThreadCard
-                            val cwd = thread.cwd ?: ws?.cwd ?: "/"
-                            onOpenChat(serverId, thread.sessionId, cwd, viewModel.workspaceId, thread.title)
-                        },
-                        onArchive = { viewModel.archiveThread(thread.sessionId) },
-                        onUnarchive = { viewModel.unarchiveThread(thread.sessionId) },
-                    )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text(if (showArchived) "Search archived" else "Search threads") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                LazyColumn(
+                    contentPadding = PaddingValues(
+                        top = 4.dp,
+                        bottom = padding.calculateBottomPadding() + 24.dp,
+                        start = 16.dp,
+                        end = 16.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(displayThreads, key = { it.sessionId }) { thread ->
+                        ThreadCard(
+                            thread = thread,
+                            connectionState = thread.serverId?.let { connectionStates[it] },
+                            isArchived = showArchived,
+                            onClick = {
+                                val serverId = thread.serverId ?: return@ThreadCard
+                                val cwd = thread.cwd ?: ws?.cwd ?: "/"
+                                onOpenChat(serverId, thread.sessionId, cwd, viewModel.workspaceId, thread.title)
+                            },
+                            onArchive = { viewModel.archiveThread(thread.sessionId) },
+                            onUnarchive = { viewModel.unarchiveThread(thread.sessionId) },
+                        )
+                    }
+                    if (displayThreads.isEmpty()) {
+                        item {
+                            Text(
+                                text = "No threads match \"$query\".",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 24.dp),
+                            )
+                        }
+                    }
                 }
             }
         }

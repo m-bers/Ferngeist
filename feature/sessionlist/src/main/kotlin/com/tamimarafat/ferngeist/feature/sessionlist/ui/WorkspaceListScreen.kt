@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -64,6 +65,15 @@ fun WorkspaceListScreen(
     val effect by viewModel.uiEffect.collectAsState()
 
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val filteredWorkspaces = remember(workspaces, query) {
+        if (query.isBlank()) workspaces
+        else workspaces.filter { item ->
+            val q = query.trim()
+            item.workspace.name.contains(q, ignoreCase = true) ||
+                item.workspace.cwd.contains(q, ignoreCase = true)
+        }
+    }
 
     LaunchedEffect(effect) {
         when (val e = effect) {
@@ -109,21 +119,47 @@ fun WorkspaceListScreen(
                     .padding(horizontal = 24.dp),
             )
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    top = padding.calculateTopPadding(),
-                    bottom = padding.calculateBottomPadding() + 24.dp,
-                    start = 16.dp,
-                    end = 16.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = padding.calculateTopPadding()),
             ) {
-                items(workspaces, key = { it.workspace.id }) { item ->
-                    WorkspaceCard(
-                        item = item,
-                        onClick = { onOpenWorkspace(item.workspace.id) },
-                    )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search workspaces") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        top = 4.dp,
+                        bottom = padding.calculateBottomPadding() + 24.dp,
+                        start = 16.dp,
+                        end = 16.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(filteredWorkspaces, key = { it.workspace.id }) { item ->
+                        WorkspaceCard(
+                            item = item,
+                            onClick = { onOpenWorkspace(item.workspace.id) },
+                        )
+                    }
+                    if (filteredWorkspaces.isEmpty()) {
+                        item {
+                            Text(
+                                text = "No workspaces match \"$query\".",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 24.dp),
+                            )
+                        }
+                    }
                 }
             }
         }
