@@ -12,15 +12,24 @@ interface SessionDao {
     @Query("SELECT * FROM sessions WHERE serverId = :serverId ORDER BY updatedAt DESC")
     fun getSessionsByServerId(serverId: String): Flow<List<SessionEntity>>
 
+    @Query("SELECT * FROM sessions WHERE workspaceId = :workspaceId ORDER BY updatedAt DESC")
+    fun getSessionsByWorkspaceId(workspaceId: String): Flow<List<SessionEntity>>
+
     @Query("SELECT * FROM sessions WHERE sessionId = :sessionId")
     suspend fun getSessionById(sessionId: String): SessionEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: SessionEntity)
 
+    @Query("UPDATE sessions SET workspaceId = :workspaceId WHERE sessionId = :sessionId")
+    suspend fun setSessionWorkspace(sessionId: String, workspaceId: String)
+
     @Query("DELETE FROM sessions WHERE sessionId = :sessionId")
     suspend fun deleteSessionById(sessionId: String)
 
     @Query("DELETE FROM sessions WHERE serverId = :serverId")
     suspend fun deleteSessionsByServerId(serverId: String)
+
+    @Query("DELETE FROM sessions WHERE workspaceId = :workspaceId")
+    suspend fun deleteSessionsByWorkspaceId(workspaceId: String)
 }
