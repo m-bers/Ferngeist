@@ -78,9 +78,39 @@ class WorkspaceDetailViewModel @Inject constructor(
         connectionRegistry.connectionStates
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
+    /** serverIds we've already pulled live sessions for in this VM's lifetime. */
+    private val refreshedServerIds = mutableSetOf<String>()
+
     init {
         viewModelScope.launch {
             _workspace.value = workspaceRepository.getById(workspaceId)
+        }
+        // C5: when an agent on this workspace's helper is connected, pull its server-side
+        // session list once and upsert into the local DB so threads created on another
+        // device (or via Zed's CLI directly) appear here. Idempotent — refreshedServerIds
+        // tracks which servers we've already pulled in this VM lifetime.
+        viewModelScope.launch {
+            availableAgents.collect { targets ->
+                val ws = _workspace.value ?: return@collect
+                targets.forEach { target ->
+                    if (target.id in refreshedServerIds) return@forEach
+                    val mgr = connectionRegistry.existingConnectionFor(target.id) ?: return@forEach
+                    if (mgr.connectionState.value !is AcpConnectionState.Connected) return@forEach
+                    refreshedServerIds += target.id
+                    runCatching {
+                        @Suppress("NewApi")
+                        mgr.listSessions(cwd = ws.cwd)
+                    }.onSuccess { remote ->
+                        remote.forEach { summary ->
+                            sessionRepository.upsertSession(
+                                serverId = target.id,
+                                workspaceId = workspaceId,
+                                summary = summary.copy(serverId = target.id),
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
