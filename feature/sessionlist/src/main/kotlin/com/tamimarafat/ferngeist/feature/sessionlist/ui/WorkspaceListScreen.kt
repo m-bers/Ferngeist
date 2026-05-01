@@ -1,9 +1,13 @@
 package com.tamimarafat.ferngeist.feature.sessionlist.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -62,6 +66,7 @@ fun WorkspaceListScreen(
 ) {
     val workspaces by viewModel.workspaces.collectAsState()
     val launchableTargets by viewModel.launchableTargets.collectAsState()
+    val helperConnectivity by viewModel.helperConnectivity.collectAsState()
     val effect by viewModel.uiEffect.collectAsState()
 
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
@@ -147,6 +152,7 @@ fun WorkspaceListScreen(
                     items(filteredWorkspaces, key = { it.workspace.id }) { item ->
                         WorkspaceCard(
                             item = item,
+                            anyAgentConnected = helperConnectivity[item.workspace.helperKey] == true,
                             onClick = { onOpenWorkspace(item.workspace.id) },
                         )
                     }
@@ -179,6 +185,7 @@ fun WorkspaceListScreen(
 @Composable
 private fun WorkspaceCard(
     item: WorkspaceListItem,
+    anyAgentConnected: Boolean,
     onClick: () -> Unit,
 ) {
     Card(
@@ -193,12 +200,27 @@ private fun WorkspaceCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                text = item.workspace.name,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(
+                            color = if (anyAgentConnected) {
+                                androidx.compose.ui.graphics.Color(0xFF4CAF50)
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            },
+                            shape = CircleShape,
+                        ),
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                Text(
+                    text = item.workspace.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 text = item.workspace.cwd,
                 style = MaterialTheme.typography.bodySmall,
@@ -214,6 +236,7 @@ private fun WorkspaceCard(
         }
     }
 }
+
 
 @Composable
 private fun EmptyWorkspacesState(

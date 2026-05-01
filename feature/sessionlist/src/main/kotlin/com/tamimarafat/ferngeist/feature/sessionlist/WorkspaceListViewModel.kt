@@ -2,6 +2,8 @@ package com.tamimarafat.ferngeist.feature.sessionlist
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
 import com.tamimarafat.ferngeist.core.model.LaunchableTarget
 import com.tamimarafat.ferngeist.core.model.Workspace
 import com.tamimarafat.ferngeist.core.model.WorkspaceIds
@@ -33,7 +35,33 @@ class WorkspaceListViewModel @Inject constructor(
     private val workspaceRepository: WorkspaceRepository,
     private val launchableTargetRepository: LaunchableTargetRepository,
     private val sessionRepository: SessionRepository,
+    connectionRegistry: AcpConnectionRegistry,
 ) : ViewModel() {
+
+    /**
+     * Map of (workspace.helperKey -> true) when *any* agent on that helper is currently
+     * Connected. Mirrors Zed's per-row status indicator in the threads sidebar — each
+     * workspace card can show a small dot.
+     */
+    val helperConnectivity: StateFlow<Map<String, Boolean>> = combine(
+        connectionRegistry.connectionStates,
+        launchableTargetRepository.getTargets(),
+    ) { states, targets ->
+        // For each helperKey in use by any target, true if its serverId is Connected.
+        targets.associate { target ->
+            val helperKey = when (target) {
+                is LaunchableTarget.HelperAgent -> target.helperSource.id
+                is LaunchableTarget.Manual -> WorkspaceIds.helperKeyForManual(
+                    target.server.scheme,
+                    target.server.host,
+                )
+            }
+            helperKey to (states[target.id] is AcpConnectionState.Connected)
+        }
+            .toList()
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, list) -> list.any { it } }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val workspaces: StateFlow<List<WorkspaceListItem>> = workspaceRepository.getAllWorkspaces()
