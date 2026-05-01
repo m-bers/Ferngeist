@@ -228,6 +228,11 @@ class ChatViewModel @Inject constructor(
                 updateState { copy(connectionDiagnostics = diagnostics) }
             }
         }
+        viewModelScope.launch {
+            connectionManager.agentInfo.collect { info ->
+                updateState { copy(agentName = info?.name) }
+            }
+        }
     }
 
     private suspend fun applySnapshot(snapshot: SessionSnapshot) {
@@ -358,6 +363,7 @@ data class ChatState(
     val canSendImages: Boolean = false,
     val supportsEmbeddedContext: Boolean = false,
     val queuedMessages: List<QueuedMessage> = emptyList(),
+    val agentName: String? = null,
     val error: String? = null,
 )
 

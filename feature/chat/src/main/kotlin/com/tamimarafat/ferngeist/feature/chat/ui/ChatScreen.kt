@@ -866,6 +866,7 @@ fun ChatScreen(
                         sessionId = sessionId,
                         sessionTitle = sessionTitle,
                         activeModel = activeModel,
+                        agentName = state.agentName,
                         connectionState = state.connectionState,
                         onNavigateBack = onNavigateBack,
                         onConnectionStatusClick = { showConnectionStatusDialog = true },
@@ -1025,6 +1026,7 @@ private fun ChatTopBar(
     sessionId: String,
     sessionTitle: String,
     activeModel: String?,
+    agentName: String?,
     connectionState: AcpConnectionState,
     onNavigateBack: () -> Unit,
     onConnectionStatusClick: () -> Unit,
@@ -1051,13 +1053,17 @@ private fun ChatTopBar(
                     ),
                 )
             }
-            activeModel?.takeIf { it.isNotBlank() }?.let { model ->
+            val subtitleParts = listOfNotNull(
+                agentName?.takeIf { it.isNotBlank() },
+                activeModel?.takeIf { it.isNotBlank() },
+            )
+            if (subtitleParts.isNotEmpty()) {
                 Text(
-                    text = model,
+                    text = subtitleParts.joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
