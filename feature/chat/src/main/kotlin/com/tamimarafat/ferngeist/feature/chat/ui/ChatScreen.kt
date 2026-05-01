@@ -696,7 +696,10 @@ fun ChatScreen(
     var showCommandsDialog by remember { mutableStateOf(false) }
     var showConnectionStatusDialog by remember { mutableStateOf(false) }
     var composerContentHeightPx by remember { mutableIntStateOf(0) }
-    var messageText by remember { mutableStateOf("") }
+    var messageText by remember { mutableStateOf(viewModel.restoreDraft()) }
+    androidx.compose.runtime.LaunchedEffect(messageText) {
+        viewModel.persistDraft(messageText)
+    }
     var composerExpanded by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current

@@ -35,6 +35,7 @@ class ChatViewModel @Inject constructor(
     private val workspaceRepository: WorkspaceRepository,
     private val helperRepository: DesktopHelperRepository,
     private val chatScrollStateStore: ChatScrollStateStore,
+    private val chatDraftStore: ChatDraftStore,
     savedStateHandle: SavedStateHandle,
 ) : MviViewModel<ChatState, ChatIntent, ChatEffect>(
     initialState(savedStateHandle, chatScrollStateStore)
@@ -329,6 +330,12 @@ class ChatViewModel @Inject constructor(
             else copy(restoredScrollSnapshot = snapshot)
         }
     }
+
+    fun persistDraft(draft: String) {
+        chatDraftStore.save(serverId, sessionId, draft)
+    }
+
+    fun restoreDraft(): String = chatDraftStore.restore(serverId, sessionId).orEmpty()
 
     private fun trace(message: String) {
         if (!BuildConfig.DEBUG) return

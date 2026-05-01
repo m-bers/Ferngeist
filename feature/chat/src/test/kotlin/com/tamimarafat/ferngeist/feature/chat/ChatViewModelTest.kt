@@ -149,6 +149,7 @@ class ChatViewModelTest {
             workspaceRepository = workspaceRepository,
             helperRepository = FakeDesktopHelperRepository(),
             chatScrollStateStore = chatScrollStateStore,
+            chatDraftStore = InMemoryChatDraftStore(),
             savedStateHandle = handle,
         )
     }
@@ -242,4 +243,14 @@ private class InMemoryChatScrollStateStore : ChatScrollStateStore {
     override fun clear(serverId: String, sessionId: String) {
         entries.remove(serverId to sessionId)
     }
+}
+
+private class InMemoryChatDraftStore : ChatDraftStore {
+    private val drafts = linkedMapOf<Pair<String, String>, String>()
+    override fun restore(serverId: String, sessionId: String): String? = drafts[serverId to sessionId]
+    override fun save(serverId: String, sessionId: String, draft: String) {
+        if (draft.isEmpty()) drafts.remove(serverId to sessionId)
+        else drafts[serverId to sessionId] = draft
+    }
+    override fun clear(serverId: String, sessionId: String) { drafts.remove(serverId to sessionId) }
 }
