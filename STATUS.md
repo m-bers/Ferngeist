@@ -11,7 +11,7 @@ This file is the catch-up sheet. Full details are in commit messages on `ci/temp
 
 ### Tier A — Information-architecture restructure
 - **A1** — `Workspace` Room entity, `WorkspaceRepository`, migration v11→v12 that buckets every existing session by `(helperKey, cwd)`. Sessions whose serverId no longer maps land in an `orphan:<serverId>` workspace rather than disappearing.
-- **A2–A5, A7** — `WorkspaceListScreen` is the new start destination. `WorkspaceDetailScreen` lists threads across all agents on that workspace's helper, with per-row agent badge + connection-state dot. `+` FAB shows an agent picker; picking starts a new thread with the workspace's cwd. Settings icon opens the existing `ServerListScreen` (now Settings-only).
+- **A2–A5, A7** — `WorkspaceListScreen` is the new start destination. `WorkspaceDetailScreen` lists threads across all agents on that workspace's helper, with per-row agent badge + connection-state dot. `+` FAB shows an agent picker; picking starts a new thread with the workspace's cwd. Settings icon opens the existing `ServerListScreen` (now Settings-only). Workspace cards in the list also get a green/gray dot indicating whether *any* agent on the workspace's helper is connected.
 - **A6** — Chat top bar subtitle now shows `<agent> · <model>`.
 - **A8** — Onboarding rewrite for the new IA is **not yet done**. Existing onboarding still references "add a server".
 
