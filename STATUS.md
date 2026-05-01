@@ -24,8 +24,9 @@ This file is the catch-up sheet. Full details are in commit messages on `ci/temp
 ### Tier C — ACP protocol parity
 - **C1** — `session/cancel` Stop button — already existed in the composer; verified.
 - **C2 (partial — heuristic)** — Tool-call output that looks like a unified diff is now line-colored (red/green/blue/muted) in the tool details sheet. Detection is heuristic from the output text; the structured `ToolCallContent::diff` block isn't yet plumbed through the SDK adapter.
+- **C5 (partial)** — When a workspace is opened and an agent on its helper is already Connected, that agent's `ListSessions(cwd)` is queried once per VM lifetime and any results are upserted into the local DB so threads created on another device or via Zed CLI directly materialize. `LoadSession` was already implemented (`ChatSessionCoordinator.loadSession` calls `connectionManager.loadSession`); `ResumeSession` is implicit on `session/load`.
 - **C7** — All four `PermissionOptionKind` values (allow_once / allow_always / reject_once / reject_always) round-trip through `SessionPermissionOption.kind`. Verified in existing rendering.
-- **C3 / C4 / C5 / C6** — **Not yet done**.
+- **C3 / C4 / C6** — **Not yet done**.
 
 ### Tier D — UX (Zed parity)
 - **D2** — Message queueing while a turn is generating. New `ChatState.queuedMessages`; a `SendMessage` submitted while `isStreaming` queues; on `TurnComplete`, the next queued message is dispatched automatically. A "<N> queued — tap to clear" pill appears above the composer.
