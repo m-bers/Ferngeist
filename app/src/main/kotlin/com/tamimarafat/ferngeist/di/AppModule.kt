@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AndroidConnectivityObserver
 import com.tamimarafat.ferngeist.core.model.repository.DesktopHelperSourceRepository
 import com.tamimarafat.ferngeist.core.model.repository.HelperAgentBindingRepository
@@ -27,9 +27,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import javax.inject.Singleton
 
@@ -99,10 +96,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideAcpConnectionManager(@ApplicationContext context: Context): AcpConnectionManager {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        val connectivityObserver = AndroidConnectivityObserver(context)
-        return AcpConnectionManager(connectivityObserver, scope)
+    fun provideAcpConnectionRegistry(@ApplicationContext context: Context): AcpConnectionRegistry {
+        return AcpConnectionRegistry(
+            connectivityObserverFactory = { AndroidConnectivityObserver(context) },
+        )
     }
 
     @Provides

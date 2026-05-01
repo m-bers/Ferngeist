@@ -10,7 +10,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.tamimarafat.ferngeist.MainActivity
 import com.tamimarafat.ferngeist.R
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -33,7 +33,7 @@ class FerngeistForegroundService : Service() {
     }
 
     @Inject
-    lateinit var connectionManager: AcpConnectionManager
+    lateinit var connectionRegistry: AcpConnectionRegistry
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observationJob: Job? = null
@@ -49,7 +49,7 @@ class FerngeistForegroundService : Service() {
             ACTION_DISCONNECT -> {
                 observationJob?.cancel()
                 scope.launch {
-                    connectionManager.disconnect()
+                    connectionRegistry.disconnectAll()
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -62,7 +62,7 @@ class FerngeistForegroundService : Service() {
 
         if (!isStarted) {
             isStarted = true
-            val notification = buildNotification(connectionManager.connectionState.value, connectionManager.agentInfo.value?.name)
+            val notification = buildNotification(connectionRegistry.connectionStates.value)
             startForeground(NOTIFICATION_ID, notification)
             observeConnectionState()
         }
@@ -82,48 +82,57 @@ class FerngeistForegroundService : Service() {
     private fun observeConnectionState() {
         observationJob?.cancel()
         observationJob = scope.launch {
-            launch {
-                connectionManager.connectionState
-                    .collect { state ->
-                        if (!isStarted) return@collect
-                        updateNotification(state)
-                        if (state is AcpConnectionState.Disconnected) {
-                            stopSelf()
-                        }
+            connectionRegistry.connectionStates
+                .collect { states ->
+                    if (!isStarted) return@collect
+                    updateNotification(states)
+                    if (states.isNotEmpty() && states.values.all { it is AcpConnectionState.Disconnected }) {
+                        stopSelf()
                     }
-            }
-            launch {
-                connectionManager.agentInfo
-                    .collect {
-                        if (!isStarted) return@collect
-                        updateNotification(connectionManager.connectionState.value)
-                    }
-            }
+                }
         }
     }
 
-    private fun updateNotification(state: AcpConnectionState) {
+    private fun updateNotification(states: Map<String, AcpConnectionState>) {
         if (!isStarted) return
-        val notification = buildNotification(state, connectionManager.agentInfo.value?.name)
+        val notification = buildNotification(states)
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, notification)
     }
 
-    private fun buildNotification(state: AcpConnectionState, agentName: String?): Notification {
-        val displayName = connectionManager.currentConnectionConfig()?.serverDisplayName ?: agentName
-        val (title, text) = when (state) {
-            is AcpConnectionState.Connected ->
+    private fun buildNotification(states: Map<String, AcpConnectionState>): Notification {
+        val connectedServerIds = states.entries
+            .filter { it.value is AcpConnectionState.Connected }
+            .map { it.key }
+        val connecting = states.values.any { it is AcpConnectionState.Connecting }
+        val failed = states.values.firstOrNull { it is AcpConnectionState.Failed } as? AcpConnectionState.Failed
+
+        val (title, text) = when {
+            connectedServerIds.isNotEmpty() -> {
+                val displayNames = connectedServerIds.mapNotNull { id ->
+                    val mgr = connectionRegistry.existingConnectionFor(id)
+                    mgr?.currentConnectionConfig()?.serverDisplayName ?: mgr?.agentInfo?.value?.name
+                }
+                val label = when (displayNames.size) {
+                    0 -> "agent"
+                    1 -> displayNames[0]
+                    else -> "${displayNames.size} agents"
+                }
                 getString(R.string.notification_connected_title) to
-                    getString(R.string.notification_connected_text, displayName ?: "agent")
-            is AcpConnectionState.Connecting ->
+                    getString(R.string.notification_connected_text, label)
+            }
+            connecting -> {
                 getString(R.string.notification_connecting_title) to
                     getString(R.string.notification_connecting_text)
-            is AcpConnectionState.Failed ->
+            }
+            failed != null -> {
                 getString(R.string.notification_failed_title) to
-                    (state.error.message ?: getString(R.string.notification_failed_text))
-            is AcpConnectionState.Disconnected ->
+                    (failed.error.message ?: getString(R.string.notification_failed_text))
+            }
+            else -> {
                 getString(R.string.notification_disconnected_title) to
                     getString(R.string.notification_disconnected_text)
+            }
         }
 
         val contentIntent = PendingIntent.getActivity(

@@ -7,7 +7,7 @@ import com.tamimarafat.ferngeist.feature.chat.BuildConfig
 import com.mikepenz.markdown.model.State as MarkdownRenderState
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpAgentCapabilities
 import com.tamimarafat.ferngeist.acp.bridge.connection.ConnectionDiagnostics
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
 import com.tamimarafat.ferngeist.acp.bridge.session.SessionConfigOption
 import com.tamimarafat.ferngeist.acp.bridge.session.SessionLoadState
@@ -27,7 +27,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
-    private val connectionManager: AcpConnectionManager,
+    connectionRegistry: AcpConnectionRegistry,
     private val helperSourceRepository: DesktopHelperSourceRepository,
     private val launchableTargetRepository: LaunchableTargetRepository,
     private val sessionRepository: SessionRepository,
@@ -60,6 +60,7 @@ class ChatViewModel @Inject constructor(
     private val sessionId: String = savedStateHandle["sessionId"] ?: error("sessionId is required")
     private val cwd: String = savedStateHandle["cwd"] ?: "/"
     private val sessionUpdatedAt: Long? = savedStateHandle.get<Long>("updatedAt")?.takeIf { it > 0L }
+    private val connectionManager = connectionRegistry.connectionFor(serverId)
     private val markdownStateStore = MarkdownStateStore(
         scope = viewModelScope,
         currentMessages = { state.value.messages },

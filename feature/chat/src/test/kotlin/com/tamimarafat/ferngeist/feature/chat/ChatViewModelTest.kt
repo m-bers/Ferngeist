@@ -2,7 +2,7 @@ package com.tamimarafat.ferngeist.feature.chat
 
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
-import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.ConnectivityObserver
 import com.tamimarafat.ferngeist.acp.bridge.session.SessionConfigValue
 import com.tamimarafat.ferngeist.core.model.LaunchableTarget
@@ -124,9 +124,9 @@ class ChatViewModelTest {
         chatScrollStateStore: ChatScrollStateStore = InMemoryChatScrollStateStore(),
     ): ChatViewModel {
         val connectivityObserver = ConnectivityObserverStub(initialState = false)
-        val manager = AcpConnectionManager(
-            connectivityObserver = connectivityObserver,
-            scope = CoroutineScope(Dispatchers.Main),
+        val registry = AcpConnectionRegistry(
+            connectivityObserverFactory = { connectivityObserver },
+            parentScope = CoroutineScope(Dispatchers.Main),
         )
         val targetRepository = FakeLaunchableTargetRepository()
         val sessionRepository = FakeSessionRepository()
@@ -139,7 +139,7 @@ class ChatViewModelTest {
         )
 
         return ChatViewModel(
-            connectionManager = manager,
+            connectionRegistry = registry,
             helperSourceRepository = FakeDesktopHelperSourceRepository(),
             launchableTargetRepository = targetRepository,
             sessionRepository = sessionRepository,

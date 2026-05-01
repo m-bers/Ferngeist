@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionConfig
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpAuthMethodInfo
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionManager
+import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpAuthenticateResult
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpInitializeResult
@@ -25,12 +26,17 @@ import com.tamimarafat.ferngeist.feature.serverlist.helper.refreshHelperSourceIf
 import com.tamimarafat.ferngeist.feature.serverlist.ui.buildLaunchConsentKey
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -92,17 +98,21 @@ private data class DesktopHelperLaunchContext(
 
 private const val LOG_TAG = "ServerListViewModel"
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ServerListViewModel @Inject constructor(
     private val helperSourceRepository: DesktopHelperSourceRepository,
     private val launchableTargetRepository: LaunchableTargetRepository,
     private val sessionRepository: SessionRepository,
-    private val connectionManager: AcpConnectionManager,
+    private val connectionRegistry: AcpConnectionRegistry,
     private val helperRepository: DesktopHelperRepository,
     private val authEnvValueStore: AuthEnvValueStore,
     private val agentLaunchConsentStore: AgentLaunchConsentStore,
     private val sessionSettingsRepository: LaunchableTargetSessionSettingsRepository,
 ) : ViewModel() {
+
+    private fun managerFor(serverId: String): AcpConnectionManager =
+        connectionRegistry.connectionFor(serverId)
 
     val servers: StateFlow<List<LaunchableTarget>> = launchableTargetRepository.getTargets()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -118,18 +128,35 @@ class ServerListViewModel @Inject constructor(
     val events = _events.asSharedFlow()
 
     init {
-        // Observe connection manager state changes
+        // Observe connection state of whichever server is currently being acted on.
+        // Each server has its own AcpConnectionManager via the registry; we follow the
+        // one identified by `connectingServerId` (set during connect/auth flows). This
+        // preserves the prior single-focus UI behavior while allowing other connections
+        // to live independently.
         viewModelScope.launch {
-            connectionManager.connectionState.collect { state ->
-                _uiState.update { it.copy(connectionState = state) }
-            }
+            _uiState
+                .map { it.connectingServerId }
+                .distinctUntilChanged()
+                .flatMapLatest { id ->
+                    if (id == null) flowOf(AcpConnectionState.Disconnected)
+                    else managerFor(id).connectionState
+                }
+                .collect { state ->
+                    _uiState.update { it.copy(connectionState = state) }
+                }
         }
 
-        // Observe ACP manager events
         viewModelScope.launch {
-            connectionManager.events.collect { event ->
-                handleManagerEvent(event)
-            }
+            _uiState
+                .map { it.connectingServerId }
+                .distinctUntilChanged()
+                .flatMapLatest { id ->
+                    if (id == null) emptyFlow()
+                    else managerFor(id).events
+                }
+                .collect { event ->
+                    handleManagerEvent(event)
+                }
         }
     }
 
@@ -165,10 +192,12 @@ class ServerListViewModel @Inject constructor(
             // Helper-backed agents should start from a fresh ACP transport. If we
             // request a new helper handoff before closing the existing socket,
             // the old runtime can survive long enough to be reused, which some
-            // stdio agents do not handle correctly on reattach.
-            if (_uiState.value.connectionState !is AcpConnectionState.Disconnected) {
+            // stdio agents do not handle correctly on reattach. Only disconnect
+            // *this* server's prior connection — others (e.g. another agent) stay up.
+            val mgr = managerFor(server.id)
+            if (mgr.connectionState.value !is AcpConnectionState.Disconnected) {
                 withContext(Dispatchers.IO) {
-                    connectionManager.disconnect()
+                    mgr.disconnect()
                 }
             }
 
@@ -216,10 +245,10 @@ class ServerListViewModel @Inject constructor(
             }
 
             val connected = withContext(Dispatchers.IO) {
-                connectionManager.connect(resolvedConfig)
+                mgr.connect(resolvedConfig)
             }
             if (!connected) {
-                val connectMessage = connectionManager.diagnostics.value.recentErrors
+                val connectMessage = mgr.diagnostics.value.recentErrors
                     .lastOrNull { entry -> entry.source == "connect" || entry.source == "connection" }
                     ?.message
                     ?: "Failed to connect to ${server.name}"
@@ -236,7 +265,7 @@ class ServerListViewModel @Inject constructor(
 
             // Step 2: Initialize and get agent info
             val initializeResult = withContext(Dispatchers.IO) {
-                connectionManager.initialize()
+                mgr.initialize()
             }
             if (initializeResult == null) {
                 val initializeDetail = buildInitializeFailureMessage(
@@ -326,7 +355,7 @@ class ServerListViewModel @Inject constructor(
             }
 
             when (val result = withContext(Dispatchers.IO) {
-                connectionManager.authenticate(methodId)
+                managerFor(serverId).authenticate(methodId)
             }) {
                 is AcpAuthenticateResult.Failure -> {
                     _uiState.update {
@@ -363,7 +392,7 @@ class ServerListViewModel @Inject constructor(
             } ?: return@launch
 
             withContext(Dispatchers.IO) {
-                connectionManager.disconnect()
+                managerFor(serverId).disconnect()
             }
             connectAndOpenServer(server)
         }
@@ -398,15 +427,19 @@ class ServerListViewModel @Inject constructor(
         }
     }
 
-    fun disconnect() {
+    fun disconnect(serverId: String) {
         viewModelScope.launch {
-            connectionManager.disconnect()
-            _uiState.update {
-                it.copy(
-                    connectionState = AcpConnectionState.Disconnected,
-                    connectingServerId = null,
-                    connectedServerState = null,
-                )
+            managerFor(serverId).disconnect()
+            _uiState.update { current ->
+                if (current.connectedServerState?.serverId == serverId) {
+                    current.copy(
+                        connectionState = AcpConnectionState.Disconnected,
+                        connectingServerId = null,
+                        connectedServerState = null,
+                    )
+                } else {
+                    current
+                }
             }
         }
     }
@@ -427,9 +460,18 @@ class ServerListViewModel @Inject constructor(
                 sessionSettingsRepository.deleteSettings(serverId)
                 launchableTargetRepository.deleteTarget(serverId)
             }
-            // If we were connected to this server, disconnect
-            if (_uiState.value.connectedServerState?.serverId == serverId) {
-                disconnect()
+            // Tear down this server's connection entirely (and clear UI state if focused).
+            connectionRegistry.removeServer(serverId)
+            _uiState.update { current ->
+                if (current.connectedServerState?.serverId == serverId) {
+                    current.copy(
+                        connectionState = AcpConnectionState.Disconnected,
+                        connectingServerId = null,
+                        connectedServerState = null,
+                    )
+                } else {
+                    current
+                }
             }
         }
     }
@@ -505,12 +547,13 @@ class ServerListViewModel @Inject constructor(
         )
         _uiState.update { it.copy(pendingAuthentication = updatedPending) }
 
+        val mgr = managerFor(server.id)
         withContext(Dispatchers.IO) {
-            connectionManager.disconnect()
+            mgr.disconnect()
         }
 
         val reconnected = withContext(Dispatchers.IO) {
-            connectionManager.connect(
+            mgr.connect(
                 AcpConnectionConfig(
                     scheme = helperSource.scheme,
                     host = helperSource.host,
@@ -523,7 +566,7 @@ class ServerListViewModel @Inject constructor(
             )
         }
         if (!reconnected) {
-            val message = connectionManager.diagnostics.value.recentErrors
+            val message = mgr.diagnostics.value.recentErrors
                 .lastOrNull { entry -> entry.source == "connect" || entry.source == "connection" }
                 ?.message
                 ?: "Failed to reconnect to ${server.name}"
@@ -538,7 +581,7 @@ class ServerListViewModel @Inject constructor(
         }
 
         val initializeResult = withContext(Dispatchers.IO) {
-            connectionManager.initialize()
+            mgr.initialize()
         }
         if (initializeResult == null) {
             val message = buildInitializeFailureMessage(
@@ -575,7 +618,7 @@ class ServerListViewModel @Inject constructor(
         }
 
         when (val result = withContext(Dispatchers.IO) {
-            connectionManager.authenticate(method.id)
+            mgr.authenticate(method.id)
         }) {
             is AcpAuthenticateResult.Failure -> {
                 _uiState.update {
@@ -751,7 +794,7 @@ class ServerListViewModel @Inject constructor(
         helperSource: DesktopHelperSource?,
         runtimeId: String?,
     ): String {
-        val diagnosticMessage = connectionManager.diagnostics.value.recentErrors
+        val diagnosticMessage = managerFor(server.id).diagnostics.value.recentErrors
             .lastOrNull { entry -> entry.source == "initialize" || entry.source == "connection" }
             ?.message
             ?.takeIf { it.isNotBlank() }
