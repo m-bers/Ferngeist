@@ -957,6 +957,32 @@ fun ChatScreen(
                             .zIndex(2f)
                     )
 
+                    if (showComposerToolbar && state.queuedMessages.isNotEmpty()) {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
+                                .imePadding()
+                                .padding(bottom = composerContentHeightDp + 16.dp)
+                                .zIndex(1f),
+                            shape = MaterialTheme.shapes.large,
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                            shadowElevation = 4.dp,
+                            onClick = { viewModel.dispatch(ChatIntent.ClearQueuedMessages) },
+                        ) {
+                            Text(
+                                text = if (state.queuedMessages.size == 1) {
+                                    "1 queued — tap to clear"
+                                } else {
+                                    "${state.queuedMessages.size} queued — tap to clear"
+                                },
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+
                     if (showComposerToolbar) {
                         ChatComposerBar(
                             modifier = Modifier
