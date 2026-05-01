@@ -183,6 +183,7 @@ sealed interface AppSessionEvent {
     /** Synthetic event emitted after session/load replay events have been forwarded. */
     data object SessionLoadComplete : AppSessionEvent
     data class TurnComplete(val stopReason: String) : AppSessionEvent
+    data class PromptError(val message: String) : AppSessionEvent
     data class Unknown(val raw: String) : AppSessionEvent
 }
 

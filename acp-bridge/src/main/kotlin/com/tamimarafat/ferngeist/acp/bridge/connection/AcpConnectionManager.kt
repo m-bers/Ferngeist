@@ -222,32 +222,45 @@ class AcpConnectionManager(
             blocks += ContentBlock.Image(data = data, mimeType = mimeType)
         }
 
-        var receivedPromptResponse = false
-        session.prompt(blocks).collect { event ->
-            when (event) {
-                is Event.SessionUpdateEvent -> {
-                    val appEvent = AcpSessionUpdateMapper.mapSessionUpdateToEvent(event.update)
-                    if (appEvent != null) {
-                        bridge.emitEvent(appEvent)
+        // Detach the prompt-collection from the caller's coroutine scope. The caller
+        // is ChatViewModel.viewModelScope; if the user navigates to a different chat,
+        // viewModelScope is cancelled, which would otherwise propagate as cancellation
+        // of session.prompt() and tear down the agent's turn server-side. The prompt
+        // must outlive the UI scope and stay attached to the connection manager.
+        scope.launch {
+            var receivedPromptResponse = false
+            try {
+                session.prompt(blocks).collect { event ->
+                    when (event) {
+                        is Event.SessionUpdateEvent -> {
+                            val appEvent = AcpSessionUpdateMapper.mapSessionUpdateToEvent(event.update)
+                            if (appEvent != null) {
+                                bridge.emitEvent(appEvent)
+                            }
+                        }
+                        is Event.PromptResponseEvent -> {
+                            receivedPromptResponse = true
+                            bridge.emitEvent(
+                                AppSessionEvent.TurnComplete(AcpSessionUpdateMapper.mapStopReason(event.response.stopReason))
+                            )
+                        }
                     }
                 }
-                is Event.PromptResponseEvent -> {
-                    receivedPromptResponse = true
-                    bridge.emitEvent(
-                        AppSessionEvent.TurnComplete(AcpSessionUpdateMapper.mapStopReason(event.response.stopReason))
-                    )
+
+                // Defensive fallback: some servers/bridges can finish the prompt stream without
+                // emitting a terminal PromptResponseEvent. Ensure the UI exits streaming state.
+                if (!receivedPromptResponse) {
+                    bridge.emitEvent(AppSessionEvent.TurnComplete("end_turn"))
+                }
+            } catch (t: Throwable) {
+                val message = formatAcpErrorMessage(t, "Prompt failed")
+                diagnosticsStore.appendError("session/prompt", message)
+                bridge.emitEvent(AppSessionEvent.PromptError(message))
+                if (!receivedPromptResponse) {
+                    bridge.emitEvent(AppSessionEvent.TurnComplete("end_turn"))
                 }
             }
         }
-
-        // Defensive fallback: some servers/bridges can finish the prompt stream without
-        // emitting a terminal PromptResponseEvent. Ensure the UI exits streaming state.
-        if (!receivedPromptResponse) {
-            bridge.emitEvent(AppSessionEvent.TurnComplete("end_turn"))
-        }
-
-        // keep bridge referenced to avoid warning; calls rely on bridge events
-        bridge.sessionId
     }
 
     suspend fun cancelSession(sessionId: String) {

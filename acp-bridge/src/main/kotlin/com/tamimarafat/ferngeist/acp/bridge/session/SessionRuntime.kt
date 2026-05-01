@@ -172,13 +172,15 @@ class SessionRuntime(
         var legacyModel = current.legacyModel
 
         messages = when (event) {
-            is AppSessionEvent.SessionLoadComplete -> SessionMessageReducer.finishStreaming(messages)
+            is AppSessionEvent.SessionLoadComplete,
+            is AppSessionEvent.PromptError -> SessionMessageReducer.finishStreaming(messages)
             else -> SessionMessageReducer.handleEvent(messages, event)
         }
 
         when (event) {
             is AppSessionEvent.TurnComplete -> isStreaming = false
             is AppSessionEvent.SessionLoadComplete -> isStreaming = false
+            is AppSessionEvent.PromptError -> isStreaming = false
             is AppSessionEvent.UsageUpdated -> {
                 usage = SessionUsage(
                     promptTokens = event.promptTokens,
@@ -291,6 +293,7 @@ class SessionRuntime(
             is AppSessionEvent.SessionInfoUpdated -> "title=${event.title} updatedAt=${event.updatedAt}"
             is AppSessionEvent.SessionLoadComplete -> "sessionLoadComplete"
             is AppSessionEvent.TurnComplete -> "stopReason=${event.stopReason}"
+            is AppSessionEvent.PromptError -> "promptErrorLen=${event.message.length}"
             is AppSessionEvent.Unknown -> "unknownRawLen=${event.raw.length}"
         }
     }
