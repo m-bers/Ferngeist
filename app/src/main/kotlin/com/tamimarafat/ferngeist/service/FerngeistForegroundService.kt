@@ -10,10 +10,12 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.tamimarafat.ferngeist.MainActivity
 import com.tamimarafat.ferngeist.R
+import androidx.core.app.RemoteInput
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
 import com.tamimarafat.ferngeist.acp.bridge.connection.PermissionFlowEvent
 import com.tamimarafat.ferngeist.acp.bridge.connection.TaggedPermissionEvent
+import com.tamimarafat.ferngeist.acp.bridge.connection.TaggedTurnCompleteEvent
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,8 @@ class FerngeistForegroundService : Service() {
         const val CHANNEL_ID = "ferngeist_connection"
         /** High-importance channel used for input-required notifications. */
         const val INPUT_REQUIRED_CHANNEL_ID = "ferngeist_input_required"
+        /** Default-importance channel for "agent is done, reply?" notifications. */
+        const val TURN_COMPLETE_CHANNEL_ID = "ferngeist_turn_complete"
         const val NOTIFICATION_ID = 1
         /**
          * Permission notifications get an id derived from `toolCallId.hashCode()` so
@@ -38,6 +42,11 @@ class FerngeistForegroundService : Service() {
          * connection-status notification.
          */
         const val PERMISSION_NOTIFICATION_ID_BASE = 1000
+        /**
+         * Turn-complete notifications get an id derived from `sessionId.hashCode()`
+         * (offset to avoid collision with [PERMISSION_NOTIFICATION_ID_BASE]).
+         */
+        const val TURN_COMPLETE_NOTIFICATION_ID_BASE = 100_000
 
         const val ACTION_START = "com.tamimarafat.ferngeist.ACTION_START_FOREGROUND"
         const val ACTION_STOP = "com.tamimarafat.ferngeist.ACTION_STOP_FOREGROUND"
@@ -55,6 +64,7 @@ class FerngeistForegroundService : Service() {
         super.onCreate()
         createNotificationChannel()
         createInputRequiredChannel()
+        createTurnCompleteChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -110,7 +120,64 @@ class FerngeistForegroundService : Service() {
                     handlePermissionEvent(tagged)
                 }
             }
+            launch {
+                connectionRegistry.turnCompleteEvents.collect { tagged ->
+                    handleTurnCompleteEvent(tagged)
+                }
+            }
         }
+    }
+
+    private fun handleTurnCompleteEvent(tagged: TaggedTurnCompleteEvent) {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        val notificationId = TURN_COMPLETE_NOTIFICATION_ID_BASE + tagged.event.sessionId.hashCode().and(0x7FFF_FFFF)
+
+        val agentName = connectionRegistry.existingConnectionFor(tagged.serverId)
+            ?.let { it.currentConnectionConfig()?.serverDisplayName ?: it.agentInfo.value?.name }
+            ?: "Agent"
+
+        val replyIntent = Intent(this, PermissionActionReceiver::class.java).apply {
+            action = PermissionActionReceiver.ACTION_REMOTE_REPLY
+            putExtra(PermissionActionReceiver.EXTRA_SERVER_ID, tagged.serverId)
+            putExtra(PermissionActionReceiver.EXTRA_SESSION_ID, tagged.event.sessionId)
+            putExtra(PermissionActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val replyPi = PendingIntent.getBroadcast(
+            this,
+            notificationId,
+            replyIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val remoteInput = RemoteInput.Builder(PermissionActionReceiver.KEY_REMOTE_INPUT_TEXT)
+            .setLabel(getString(R.string.notification_turn_complete_reply_hint))
+            .build()
+        val replyAction = NotificationCompat.Action.Builder(
+            0,
+            getString(R.string.notification_turn_complete_reply_action),
+            replyPi,
+        )
+            .addRemoteInput(remoteInput)
+            .setAllowGeneratedReplies(true)
+            .build()
+
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            notificationId,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val notification = NotificationCompat.Builder(this, TURN_COMPLETE_CHANNEL_ID)
+            .setContentTitle(getString(R.string.notification_turn_complete_title, agentName))
+            .setContentText(getString(R.string.notification_turn_complete_text))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .addAction(replyAction)
+            .build()
+
+        nm.notify(notificationId, notification)
     }
 
     private fun handlePermissionEvent(tagged: TaggedPermissionEvent) {
@@ -205,6 +272,18 @@ class FerngeistForegroundService : Service() {
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
             description = getString(R.string.notification_channel_input_required_description)
+        }
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.createNotificationChannel(channel)
+    }
+
+    private fun createTurnCompleteChannel() {
+        val channel = NotificationChannel(
+            TURN_COMPLETE_CHANNEL_ID,
+            getString(R.string.notification_channel_turn_complete_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = getString(R.string.notification_channel_turn_complete_description)
         }
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(channel)

@@ -55,6 +55,13 @@ class AcpConnectionRegistry(
     val permissionEvents: SharedFlow<TaggedPermissionEvent> = _permissionEvents.asSharedFlow()
 
     /**
+     * Aggregated stream of turn-completion events across all servers, tagged with the
+     * originating serverId. Used to post end-of-turn reply notifications.
+     */
+    private val _turnCompleteEvents = MutableSharedFlow<TaggedTurnCompleteEvent>(extraBufferCapacity = 32)
+    val turnCompleteEvents: SharedFlow<TaggedTurnCompleteEvent> = _turnCompleteEvents.asSharedFlow()
+
+    /**
      * Returns (and lazily creates) the [AcpConnectionManager] for [serverId]. The first
      * call for a given server allocates a new transport + scope; subsequent calls return
      * the same instance.
@@ -70,6 +77,11 @@ class AcpConnectionRegistry(
             childScope.launch {
                 manager.permissionEvents.collect { event ->
                     _permissionEvents.emit(TaggedPermissionEvent(serverId, event))
+                }
+            }
+            childScope.launch {
+                manager.turnCompleteEvents.collect { event ->
+                    _turnCompleteEvents.emit(TaggedTurnCompleteEvent(serverId, event))
                 }
             }
             _activeServerIds.value = _activeServerIds.value + serverId
@@ -131,4 +143,10 @@ class AcpConnectionRegistry(
 data class TaggedPermissionEvent(
     val serverId: String,
     val event: PermissionFlowEvent,
+)
+
+/** A [TurnCompleteEvent] paired with the serverId of the manager that emitted it. */
+data class TaggedTurnCompleteEvent(
+    val serverId: String,
+    val event: TurnCompleteEvent,
 )

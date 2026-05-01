@@ -13,4 +13,10 @@
     <string name="notification_action_disconnect">Disconnect</string>
     <string name="notification_channel_input_required_name">Input required</string>
     <string name="notification_channel_input_required_description">Notifies you when an agent needs your approval or a multiple-choice answer.</string>
+    <string name="notification_channel_turn_complete_name">Agent finished</string>
+    <string name="notification_channel_turn_complete_description">Notifies you when an agent finishes a turn so you can reply directly from the notification.</string>
+    <string name="notification_turn_complete_title">%1$s finished a turn</string>
+    <string name="notification_turn_complete_text">Tap Reply to continue the conversation.</string>
+    <string name="notification_turn_complete_reply_action">Reply</string>
+    <string name="notification_turn_complete_reply_hint">Type a reply…</string>
 </resources>

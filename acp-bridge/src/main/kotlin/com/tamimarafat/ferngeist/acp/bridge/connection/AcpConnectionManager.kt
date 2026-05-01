@@ -61,6 +61,16 @@ class AcpConnectionManager(
     private val _permissionEvents = MutableSharedFlow<PermissionFlowEvent>(extraBufferCapacity = 64)
     val permissionEvents: SharedFlow<PermissionFlowEvent> = _permissionEvents.asSharedFlow()
 
+    /**
+     * Per-server stream of turn-completion events. Subscribers (e.g. notification
+     * surfaces) listen to know when the agent finished a turn and is awaiting the
+     * user's next prompt. [TurnCompleteEvent.summary] is the trailing snippet of
+     * the agent's last assistant message (so a notification can preview what the
+     * agent said before going idle).
+     */
+    private val _turnCompleteEvents = MutableSharedFlow<TurnCompleteEvent>(extraBufferCapacity = 32)
+    val turnCompleteEvents: SharedFlow<TurnCompleteEvent> = _turnCompleteEvents.asSharedFlow()
+
     private val _agentCapabilities = MutableStateFlow<AcpAgentCapabilities?>(null)
     val agentCapabilities: StateFlow<AcpAgentCapabilities?> = _agentCapabilities.asStateFlow()
 
@@ -251,6 +261,12 @@ class AcpConnectionManager(
                             receivedPromptResponse = true
                             bridge.emitEvent(
                                 AppSessionEvent.TurnComplete(AcpSessionUpdateMapper.mapStopReason(event.response.stopReason))
+                            )
+                            _turnCompleteEvents.emit(
+                                TurnCompleteEvent(
+                                    sessionId = sessionId,
+                                    stopReason = AcpSessionUpdateMapper.mapStopReason(event.response.stopReason),
+                                )
                             )
                         }
                     }
@@ -618,3 +634,9 @@ sealed interface PermissionFlowEvent {
         override val toolCallId: String,
     ) : PermissionFlowEvent
 }
+
+/** Fires when an agent finishes a turn and is awaiting the user's next prompt. */
+data class TurnCompleteEvent(
+    val sessionId: String,
+    val stopReason: String,
+)
