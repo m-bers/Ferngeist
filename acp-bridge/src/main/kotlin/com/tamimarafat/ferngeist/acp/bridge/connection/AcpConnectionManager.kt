@@ -52,6 +52,15 @@ class AcpConnectionManager(
     private val _events = MutableSharedFlow<AcpManagerEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<AcpManagerEvent> = _events.asSharedFlow()
 
+    /**
+     * Per-server stream of permission lifecycle events. Subscribers (e.g. the foreground
+     * service for rich Android notifications) can listen here to know when an agent on
+     * this server requests user input, and when the request gets resolved (regardless of
+     * whether the answer came from the in-app sheet or a notification action).
+     */
+    private val _permissionEvents = MutableSharedFlow<PermissionFlowEvent>(extraBufferCapacity = 64)
+    val permissionEvents: SharedFlow<PermissionFlowEvent> = _permissionEvents.asSharedFlow()
+
     private val _agentCapabilities = MutableStateFlow<AcpAgentCapabilities?>(null)
     val agentCapabilities: StateFlow<AcpAgentCapabilities?> = _agentCapabilities.asStateFlow()
 
@@ -318,12 +327,14 @@ class AcpConnectionManager(
         val pending = sessionRegistry.takePendingPermissionRequest(toolCallId) ?: return
         pending.deferred.complete(RequestPermissionOutcome.Selected(PermissionOptionId(optionId)))
         emitToBridge(sessionId, AppSessionEvent.ToolPermissionResolved(toolCallId))
+        _permissionEvents.emit(PermissionFlowEvent.Resolved(sessionId, toolCallId))
     }
 
     suspend fun respondPermissionCancelled(sessionId: String, toolCallId: String) {
         val pending = sessionRegistry.takePendingPermissionRequest(toolCallId) ?: return
         pending.deferred.complete(RequestPermissionOutcome.Cancelled)
         emitToBridge(sessionId, AppSessionEvent.ToolPermissionResolved(toolCallId))
+        _permissionEvents.emit(PermissionFlowEvent.Resolved(sessionId, toolCallId))
     }
 
     fun getSession(sessionId: String): SessionBridge? = sessionRegistry.getBridge(sessionId)
@@ -371,6 +382,18 @@ class AcpConnectionManager(
                     requestId = toolId,
                     title = toolCall.title,
                     options = options
+                )
+            )
+
+            // Mirror to the per-server permission stream so notification surfaces (and other
+            // out-of-chat consumers) can post a user-facing prompt without the chat being open.
+            _permissionEvents.emit(
+                PermissionFlowEvent.Requested(
+                    sessionId = sessionId,
+                    toolCallId = toolId,
+                    title = toolCall.title.ifBlank { "Permission Request" },
+                    toolKind = toolCall.kind?.toString()?.lowercase(),
+                    options = options,
                 )
             )
 
@@ -570,4 +593,28 @@ sealed interface AcpManagerEvent {
     data class Initialized(val result: AcpInitializeResult) : AcpManagerEvent
     data class Authenticated(val methodId: String) : AcpManagerEvent
     data class Error(val throwable: Throwable) : AcpManagerEvent
+}
+
+/**
+ * Emitted by [AcpConnectionManager.permissionEvents] whenever an agent on this server requests
+ * user input (a tool-call approval, a plan-stage multiple-choice, etc.) and when that request is
+ * subsequently resolved. Subscribers (notification UI, foreground services) use these to surface
+ * the prompt outside of the chat screen.
+ */
+sealed interface PermissionFlowEvent {
+    val sessionId: String
+    val toolCallId: String
+
+    data class Requested(
+        override val sessionId: String,
+        override val toolCallId: String,
+        val title: String,
+        val toolKind: String?,
+        val options: List<SessionPermissionOption>,
+    ) : PermissionFlowEvent
+
+    data class Resolved(
+        override val sessionId: String,
+        override val toolCallId: String,
+    ) : PermissionFlowEvent
 }

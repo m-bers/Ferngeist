@@ -6,15 +6,19 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -42,6 +46,15 @@ class AcpConnectionRegistry(
     val activeServerIds: StateFlow<Set<String>> = _activeServerIds.asStateFlow()
 
     /**
+     * Aggregated stream of permission lifecycle events from every active per-server
+     * manager, tagged with the originating serverId. Consumers like the foreground
+     * service use this to post / cancel rich Android notifications when an agent
+     * needs the user's input.
+     */
+    private val _permissionEvents = MutableSharedFlow<TaggedPermissionEvent>(extraBufferCapacity = 64)
+    val permissionEvents: SharedFlow<TaggedPermissionEvent> = _permissionEvents.asSharedFlow()
+
+    /**
      * Returns (and lazily creates) the [AcpConnectionManager] for [serverId]. The first
      * call for a given server allocates a new transport + scope; subsequent calls return
      * the same instance.
@@ -51,6 +64,14 @@ class AcpConnectionRegistry(
             val parentJob = parentScope.coroutineContext[Job]
             val childScope = CoroutineScope(SupervisorJob(parentJob) + Dispatchers.Main)
             val manager = AcpConnectionManager(connectivityObserverFactory(), childScope)
+            // Re-emit per-server permission events on the registry's aggregated flow,
+            // tagged with serverId so out-of-chat consumers (notifications, etc.) know
+            // which server to call back into.
+            childScope.launch {
+                manager.permissionEvents.collect { event ->
+                    _permissionEvents.emit(TaggedPermissionEvent(serverId, event))
+                }
+            }
             _activeServerIds.value = _activeServerIds.value + serverId
             Entry(manager = manager, scope = childScope)
         }.manager
@@ -105,3 +126,9 @@ class AcpConnectionRegistry(
         _activeServerIds.value = _activeServerIds.value - serverId
     }
 }
+
+/** A [PermissionFlowEvent] paired with the serverId of the manager that emitted it. */
+data class TaggedPermissionEvent(
+    val serverId: String,
+    val event: PermissionFlowEvent,
+)

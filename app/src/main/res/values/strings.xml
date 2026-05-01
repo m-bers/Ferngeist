@@ -11,4 +11,6 @@
     <string name="notification_failed_title">Connection Failed</string>
     <string name="notification_failed_text">Could not connect to agent server</string>
     <string name="notification_action_disconnect">Disconnect</string>
+    <string name="notification_channel_input_required_name">Input required</string>
+    <string name="notification_channel_input_required_description">Notifies you when an agent needs your approval or a multiple-choice answer.</string>
 </resources>

@@ -38,6 +38,10 @@
             android:name=".service.FerngeistForegroundService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <receiver
+            android:name=".service.PermissionActionReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

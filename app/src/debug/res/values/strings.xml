@@ -4,4 +4,5 @@
     <string name="notification_connecting_title">Ferngeist Debug Connecting</string>
     <string name="notification_disconnected_title">Ferngeist Debug Disconnected</string>
     <string name="notification_failed_title">Ferngeist Debug — Connection Failed</string>
+    <string name="notification_channel_input_required_name">Input required (Debug)</string>
 </resources>
