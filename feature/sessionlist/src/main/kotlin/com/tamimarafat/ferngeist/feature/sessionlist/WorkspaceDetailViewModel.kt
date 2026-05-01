@@ -52,6 +52,13 @@ class WorkspaceDetailViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val archivedThreads: StateFlow<List<WorkspaceThread>> = sessionRepository
+        .getArchivedSessionsForWorkspace(workspaceId)
+        .combine(launchableTargetRepository.getTargets()) { sessions, targets ->
+            sessions.map { session -> session.toThread(targets) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     /**
      * Agents that can serve this workspace (i.e. live on the workspace's helperKey).
      * Used when the user starts a new thread.
@@ -94,6 +101,14 @@ class WorkspaceDetailViewModel @Inject constructor(
         viewModelScope.launch {
             sessionRepository.deleteSession(serverId, sessionId)
         }
+    }
+
+    fun archiveThread(sessionId: String) {
+        viewModelScope.launch { sessionRepository.archiveSession(sessionId) }
+    }
+
+    fun unarchiveThread(sessionId: String) {
+        viewModelScope.launch { sessionRepository.unarchiveSession(sessionId) }
     }
 
     private fun SessionSummary.toThread(targets: List<LaunchableTarget>): WorkspaceThread {

@@ -23,6 +23,24 @@ class SessionRepositoryImpl(
         }
     }
 
+    override fun getArchivedSessionsForWorkspace(workspaceId: String): Flow<List<SessionSummary>> {
+        return sessionDao.getArchivedSessionsByWorkspaceId(workspaceId).map { entities ->
+            entities.map(::toSummary)
+        }
+    }
+
+    override fun getAllArchivedSessions(): Flow<List<SessionSummary>> {
+        return sessionDao.getAllArchivedSessions().map { entities -> entities.map(::toSummary) }
+    }
+
+    override suspend fun archiveSession(sessionId: String) {
+        sessionDao.archiveSession(sessionId, System.currentTimeMillis())
+    }
+
+    override suspend fun unarchiveSession(sessionId: String) {
+        sessionDao.unarchiveSession(sessionId)
+    }
+
     override suspend fun upsertSession(serverId: String, summary: SessionSummary) {
         upsertSession(serverId = serverId, workspaceId = null, summary = summary)
     }

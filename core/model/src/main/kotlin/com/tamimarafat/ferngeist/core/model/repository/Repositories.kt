@@ -44,8 +44,13 @@ interface LaunchableTargetRepository {
 interface SessionRepository {
     fun getSessions(serverId: String): Flow<List<SessionSummary>>
     fun getSessionsForWorkspace(workspaceId: String): Flow<List<SessionSummary>>
+    /** Archived threads only — used by the workspace-history surface. */
+    fun getArchivedSessionsForWorkspace(workspaceId: String): Flow<List<SessionSummary>>
+    fun getAllArchivedSessions(): Flow<List<SessionSummary>>
     suspend fun upsertSession(serverId: String, summary: SessionSummary)
     suspend fun upsertSession(serverId: String, workspaceId: String?, summary: SessionSummary)
+    suspend fun archiveSession(sessionId: String)
+    suspend fun unarchiveSession(sessionId: String)
     suspend fun deleteSession(serverId: String, sessionId: String)
     suspend fun clearSessions(serverId: String)
 }

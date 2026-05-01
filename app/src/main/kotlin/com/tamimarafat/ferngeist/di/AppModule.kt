@@ -43,7 +43,7 @@ object AppModule {
             context,
             FerngeistDatabase::class.java,
             FerngeistDatabase.DATABASE_NAME,
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13).build()
     }
     
     @Provides
@@ -550,6 +550,18 @@ private val MIGRATION_11_12 = object : Migration(11, 12) {
         db.execSQL("ALTER TABLE `sessions_new` RENAME TO `sessions`")
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_sessions_serverId` ON `sessions` (`serverId`)")
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_sessions_workspaceId` ON `sessions` (`workspaceId`)")
+    }
+}
+
+/**
+ * v12 → v13: Add archive support to sessions (Zed-parity threads-history feature).
+ *  - `isArchived` (NOT NULL, default 0)
+ *  - `archivedAt` (NULL by default)
+ */
+private val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `sessions` ADD COLUMN `isArchived` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `sessions` ADD COLUMN `archivedAt` INTEGER")
     }
 }
 

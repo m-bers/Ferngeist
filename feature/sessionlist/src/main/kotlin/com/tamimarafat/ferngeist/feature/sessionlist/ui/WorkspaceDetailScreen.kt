@@ -65,6 +65,7 @@ fun WorkspaceDetailScreen(
 ) {
     val workspace by viewModel.workspace.collectAsState()
     val threads by viewModel.threads.collectAsState()
+    val archivedThreads by viewModel.archivedThreads.collectAsState()
     val agents by viewModel.availableAgents.collectAsState()
     val connectionStates by viewModel.connectionStates.collectAsState()
 
@@ -72,6 +73,7 @@ fun WorkspaceDetailScreen(
     var showRenameDialog by rememberSaveable { mutableStateOf(false) }
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
+    var showArchived by rememberSaveable { mutableStateOf(false) }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val ws = workspace
@@ -115,6 +117,15 @@ fun WorkspaceDetailScreen(
                             onDismissRequest = { menuExpanded = false },
                         ) {
                             DropdownMenuItem(
+                                text = {
+                                    Text(if (showArchived) "Show active" else "Show archived (${archivedThreads.size})")
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    showArchived = !showArchived
+                                },
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Rename") },
                                 onClick = {
                                     menuExpanded = false
@@ -140,9 +151,11 @@ fun WorkspaceDetailScreen(
             }
         },
     ) { padding ->
-        if (threads.isEmpty()) {
+        val displayThreads = if (showArchived) archivedThreads else threads
+        if (displayThreads.isEmpty()) {
             EmptyThreadsState(
                 hasAgents = agents.isNotEmpty(),
+                isArchivedView = showArchived,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
@@ -158,15 +171,18 @@ fun WorkspaceDetailScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(threads, key = { it.sessionId }) { thread ->
+                items(displayThreads, key = { it.sessionId }) { thread ->
                     ThreadCard(
                         thread = thread,
                         connectionState = thread.serverId?.let { connectionStates[it] },
+                        isArchived = showArchived,
                         onClick = {
                             val serverId = thread.serverId ?: return@ThreadCard
                             val cwd = thread.cwd ?: ws?.cwd ?: "/"
                             onOpenChat(serverId, thread.sessionId, cwd, viewModel.workspaceId, thread.title)
                         },
+                        onArchive = { viewModel.archiveThread(thread.sessionId) },
+                        onUnarchive = { viewModel.unarchiveThread(thread.sessionId) },
                     )
                 }
             }
@@ -220,8 +236,12 @@ fun WorkspaceDetailScreen(
 private fun ThreadCard(
     thread: WorkspaceThread,
     connectionState: AcpConnectionState?,
+    isArchived: Boolean,
     onClick: () -> Unit,
+    onArchive: () -> Unit,
+    onUnarchive: () -> Unit,
 ) {
+    var rowMenuOpen by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -230,28 +250,62 @@ private fun ThreadCard(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
     ) {
-        Column(
+        Row(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.Top,
         ) {
-            Text(
-                text = thread.title ?: "Untitled thread",
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ConnectionDot(state = connectionState)
-                Spacer(modifier = Modifier.size(8.dp))
-                AgentBadge(name = thread.agentName ?: "Agent")
-                Spacer(modifier = Modifier.size(8.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Text(
-                    text = thread.cwd ?: "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = thread.title ?: "Untitled thread",
+                    style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!isArchived) {
+                        ConnectionDot(state = connectionState)
+                        Spacer(modifier = Modifier.size(8.dp))
+                    }
+                    AgentBadge(name = thread.agentName ?: "Agent")
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        text = thread.cwd ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Box {
+                IconButton(onClick = { rowMenuOpen = true }) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "Thread menu")
+                }
+                DropdownMenu(
+                    expanded = rowMenuOpen,
+                    onDismissRequest = { rowMenuOpen = false },
+                ) {
+                    if (isArchived) {
+                        DropdownMenuItem(
+                            text = { Text("Restore") },
+                            onClick = {
+                                rowMenuOpen = false
+                                onUnarchive()
+                            },
+                        )
+                    } else {
+                        DropdownMenuItem(
+                            text = { Text("Archive") },
+                            onClick = {
+                                rowMenuOpen = false
+                                onArchive()
+                            },
+                        )
+                    }
+                }
             }
         }
     }
@@ -293,6 +347,7 @@ private fun AgentBadge(name: String) {
 @Composable
 private fun EmptyThreadsState(
     hasAgents: Boolean,
+    isArchivedView: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -301,15 +356,15 @@ private fun EmptyThreadsState(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "No threads yet",
+            text = if (isArchivedView) "No archived threads" else "No threads yet",
             style = MaterialTheme.typography.headlineSmall,
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = if (hasAgents) {
-                "Tap + to start a new thread."
-            } else {
-                "There are no agents available for this workspace's helper."
+            text = when {
+                isArchivedView -> "Threads you archive show up here."
+                hasAgents -> "Tap + to start a new thread."
+                else -> "There are no agents available for this workspace's helper."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

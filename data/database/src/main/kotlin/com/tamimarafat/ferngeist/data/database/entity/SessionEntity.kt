@@ -15,4 +15,6 @@ data class SessionEntity(
     val title: String?,
     val cwd: String?,
     val updatedAt: Long?,
+    val isArchived: Boolean = false,
+    val archivedAt: Long? = null,
 )
