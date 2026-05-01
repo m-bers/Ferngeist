@@ -37,6 +37,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -701,6 +702,7 @@ fun ChatScreen(
     val focusManager = LocalFocusManager.current
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val navBottomPx = WindowInsets.navigationBars.getBottom(density)
     val systemBottomInsetPx = if (imeBottomPx > navBottomPx) imeBottomPx else navBottomPx
@@ -867,6 +869,20 @@ fun ChatScreen(
                         connectionState = state.connectionState,
                         onNavigateBack = onNavigateBack,
                         onConnectionStatusClick = { showConnectionStatusDialog = true },
+                        onShareAsMarkdown = {
+                            val markdown = com.tamimarafat.ferngeist.feature.chat.ThreadMarkdown.render(
+                                messages = state.messages,
+                                sessionTitle = sessionTitle,
+                            )
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/markdown"
+                                putExtra(android.content.Intent.EXTRA_TEXT, markdown)
+                                putExtra(android.content.Intent.EXTRA_TITLE, sessionTitle)
+                            }
+                            val chooser = android.content.Intent.createChooser(intent, "Share thread")
+                            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(chooser)
+                        },
                         sharedTransitionScope = sharedTransitionScope,
                         animatedContentScope = animatedContentScope,
                     )
@@ -1012,6 +1028,7 @@ private fun ChatTopBar(
     connectionState: AcpConnectionState,
     onNavigateBack: () -> Unit,
     onConnectionStatusClick: () -> Unit,
+    onShareAsMarkdown: () -> Unit,
     sharedTransitionScope: SharedTransitionScope,
     animatedContentScope: AnimatedContentScope,
 ) {
@@ -1051,6 +1068,27 @@ private fun ChatTopBar(
             )
         }
     }, actions = {
+        var menuOpen by remember { mutableStateOf(false) }
+        Box {
+            androidx.compose.material3.IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    imageVector = Icons.Outlined.MoreVert,
+                    contentDescription = "Thread menu",
+                )
+            }
+            androidx.compose.material3.DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Open as Markdown") },
+                    onClick = {
+                        menuOpen = false
+                        onShareAsMarkdown()
+                    },
+                )
+            }
+        }
         val connectionLabel = connectionStateLabel(connectionState)
         TooltipBox(
             positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
