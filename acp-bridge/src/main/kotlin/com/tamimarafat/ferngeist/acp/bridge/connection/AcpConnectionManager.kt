@@ -391,7 +391,7 @@ class AcpConnectionManager(
                 PermissionFlowEvent.Requested(
                     sessionId = sessionId,
                     toolCallId = toolId,
-                    title = toolCall.title.ifBlank { "Permission Request" },
+                    title = toolCall.title?.takeIf { it.isNotBlank() } ?: "Permission Request",
                     toolKind = toolCall.kind?.toString()?.lowercase(),
                     options = options,
                 )

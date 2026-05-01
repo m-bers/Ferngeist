@@ -57,6 +57,7 @@ internal class ChatSessionCoordinator(
         suspend fun onCancelUnsupported()
         suspend fun onModelUpdated()
         suspend fun onCapabilitiesChanged(capabilities: AcpAgentCapabilities)
+        suspend fun onTurnComplete() {}
     }
 
     private var activeSessionId: String = initialSessionId
@@ -445,6 +446,9 @@ internal class ChatSessionCoordinator(
                     message = event.message,
                     stopStreaming = true,
                 )
+            }
+            is AppSessionEvent.TurnComplete -> {
+                callbacks.onTurnComplete()
             }
             else -> Unit
         }

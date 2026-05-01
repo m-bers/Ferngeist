@@ -179,6 +179,15 @@ class ChatViewModel @Inject constructor(
                     )
                 }
             }
+
+            override suspend fun onTurnComplete() {
+                // Pop the next queued message (if any) and dispatch it. Mirrors Zed's
+                // "queued-during-generation" behavior: messages submitted while the
+                // agent was still working are sent at the next turn boundary.
+                val pending = state.value.queuedMessages.firstOrNull() ?: return
+                updateState { copy(queuedMessages = queuedMessages.drop(1)) }
+                sessionCoordinator.sendMessage(pending.text, pending.images)
+            }
         },
     )
 
@@ -265,12 +274,37 @@ class ChatViewModel @Inject constructor(
 
     override suspend fun handleIntent(intent: ChatIntent) {
         when (intent) {
-            is ChatIntent.SendMessage -> sessionCoordinator.sendMessage(intent.text, intent.images)
+            is ChatIntent.SendMessage -> {
+                if (state.value.isStreaming) {
+                    // Zed-parity message queueing: a new prompt submitted while the
+                    // agent is still generating is queued and dispatched at the next
+                    // turn boundary (see onTurnComplete callback).
+                    updateState {
+                        copy(
+                            queuedMessages = queuedMessages +
+                                QueuedMessage(text = intent.text, images = intent.images),
+                        )
+                    }
+                } else {
+                    sessionCoordinator.sendMessage(intent.text, intent.images)
+                }
+            }
             is ChatIntent.CancelStreaming -> sessionCoordinator.cancelStreaming()
             is ChatIntent.SetConfigOption -> sessionCoordinator.setConfigOption(intent.optionId, intent.value)
             is ChatIntent.GrantPermission -> sessionCoordinator.grantPermission(intent.toolCallId, intent.optionId)
             is ChatIntent.DenyPermission -> sessionCoordinator.denyPermission(intent.toolCallId)
             is ChatIntent.RetryLoad -> sessionCoordinator.loadSession()
+            is ChatIntent.RemoveQueuedMessage -> {
+                updateState {
+                    val next = queuedMessages.toMutableList().apply {
+                        removeAll { it.id == intent.id }
+                    }
+                    copy(queuedMessages = next)
+                }
+            }
+            ChatIntent.ClearQueuedMessages -> {
+                updateState { copy(queuedMessages = emptyList()) }
+            }
         }
     }
 
@@ -314,7 +348,15 @@ data class ChatState(
     val commandsAdvertised: Boolean = false,
     val canSendImages: Boolean = false,
     val supportsEmbeddedContext: Boolean = false,
+    val queuedMessages: List<QueuedMessage> = emptyList(),
     val error: String? = null,
+)
+
+/** A user message awaiting dispatch at the next turn boundary. */
+data class QueuedMessage(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val text: String,
+    val images: List<ChatImageData> = emptyList(),
 )
 
 data class UsageState(
@@ -333,6 +375,8 @@ sealed interface ChatIntent {
     data class GrantPermission(val toolCallId: String, val optionId: String) : ChatIntent
     data class DenyPermission(val toolCallId: String) : ChatIntent
     data object RetryLoad : ChatIntent
+    data class RemoveQueuedMessage(val id: String) : ChatIntent
+    data object ClearQueuedMessages : ChatIntent
 }
 
 sealed interface ChatEffect {
