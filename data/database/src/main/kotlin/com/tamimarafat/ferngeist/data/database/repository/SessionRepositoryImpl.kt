@@ -58,5 +58,6 @@ class SessionRepositoryImpl(
         title = entity.title,
         cwd = entity.cwd,
         updatedAt = entity.updatedAt,
+        serverId = entity.serverId,
     )
 }

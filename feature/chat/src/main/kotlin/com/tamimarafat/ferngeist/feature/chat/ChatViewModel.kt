@@ -20,6 +20,7 @@ import com.tamimarafat.ferngeist.core.model.SessionSummary
 import com.tamimarafat.ferngeist.core.model.repository.DesktopHelperSourceRepository
 import com.tamimarafat.ferngeist.core.model.repository.LaunchableTargetRepository
 import com.tamimarafat.ferngeist.core.model.repository.SessionRepository
+import com.tamimarafat.ferngeist.core.model.repository.WorkspaceRepository
 import com.tamimarafat.ferngeist.feature.serverlist.helper.DesktopHelperRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
@@ -31,6 +32,7 @@ class ChatViewModel @Inject constructor(
     private val helperSourceRepository: DesktopHelperSourceRepository,
     private val launchableTargetRepository: LaunchableTargetRepository,
     private val sessionRepository: SessionRepository,
+    private val workspaceRepository: WorkspaceRepository,
     private val helperRepository: DesktopHelperRepository,
     private val chatScrollStateStore: ChatScrollStateStore,
     savedStateHandle: SavedStateHandle,
@@ -60,6 +62,7 @@ class ChatViewModel @Inject constructor(
     private val sessionId: String = savedStateHandle["sessionId"] ?: error("sessionId is required")
     private val cwd: String = savedStateHandle["cwd"] ?: "/"
     private val sessionUpdatedAt: Long? = savedStateHandle.get<Long>("updatedAt")?.takeIf { it > 0L }
+    private val workspaceId: String? = savedStateHandle.get<String>("workspaceId")?.takeIf { it.isNotBlank() }
     private val connectionManager = connectionRegistry.connectionFor(serverId)
     private val markdownStateStore = MarkdownStateStore(
         scope = viewModelScope,
@@ -115,12 +118,19 @@ class ChatViewModel @Inject constructor(
             }
 
             override suspend fun onSessionStored(sessionId: String, cwd: String, updatedAt: Long) {
+                // If the navigation graph passed an explicit workspaceId, use it. Otherwise
+                // derive one from (serverId, cwd) via the WorkspaceRepository so the session
+                // ends up in *some* workspace and shows up in the new IA.
+                val resolvedWorkspaceId = workspaceId
+                    ?: workspaceRepository.findOrCreateForServer(serverId, cwd)?.id
                 sessionRepository.upsertSession(
                     serverId = serverId,
+                    workspaceId = resolvedWorkspaceId,
                     summary = SessionSummary(
                         id = sessionId,
                         cwd = cwd,
                         updatedAt = updatedAt,
+                        serverId = serverId,
                     ),
                 )
             }

@@ -22,4 +22,6 @@ data class SessionSummary(
     val title: String? = null,
     val cwd: String? = null,
     val updatedAt: Long? = null,
+    /** The agent (server) this thread is talking to. Null when the source data hasn't supplied it. */
+    val serverId: String? = null,
 )

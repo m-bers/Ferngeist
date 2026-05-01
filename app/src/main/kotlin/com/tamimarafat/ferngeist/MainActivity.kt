@@ -54,7 +54,11 @@ import com.tamimarafat.ferngeist.feature.serverlist.ui.DesktopHelperAgentsScreen
 import com.tamimarafat.ferngeist.feature.serverlist.ui.ServerListScreen
 import com.tamimarafat.ferngeist.core.model.LaunchableTarget
 import com.tamimarafat.ferngeist.feature.sessionlist.SessionListViewModel
+import com.tamimarafat.ferngeist.feature.sessionlist.WorkspaceDetailViewModel
+import com.tamimarafat.ferngeist.feature.sessionlist.WorkspaceListViewModel
 import com.tamimarafat.ferngeist.feature.sessionlist.ui.SessionListScreen
+import com.tamimarafat.ferngeist.feature.sessionlist.ui.WorkspaceDetailScreen
+import com.tamimarafat.ferngeist.feature.sessionlist.ui.WorkspaceListScreen
 import com.tamimarafat.ferngeist.service.BatteryOptimizationDialog
 import com.tamimarafat.ferngeist.service.BatteryOptimizationHelper
 import com.tamimarafat.ferngeist.service.BatteryOptimizationPreferences
@@ -90,7 +94,7 @@ fun FerngeistNavHost() {
     SharedTransitionLayout {
         NavHost(
             navController = navController,
-            startDestination = "server_list",
+            startDestination = "workspace_list",
             enterTransition = {
                 if (isSessionChatTransition()) {
                     EnterTransition.None
@@ -132,6 +136,40 @@ fun FerngeistNavHost() {
                 }
             },
         ) {
+            composable("workspace_list") {
+                val viewModel: WorkspaceListViewModel = hiltViewModel()
+
+                NotificationPermissionEffect()
+
+                WorkspaceListScreen(
+                    viewModel = viewModel,
+                    onOpenWorkspace = { workspaceId ->
+                        val encoded = Uri.encode(workspaceId)
+                        navController.navigate("workspace_detail/$encoded")
+                    },
+                    onOpenSettings = { navController.navigate("server_list") },
+                )
+            }
+
+            composable(
+                route = "workspace_detail/{workspaceId}",
+                arguments = listOf(navArgument("workspaceId") { type = NavType.StringType }),
+            ) {
+                val viewModel: WorkspaceDetailViewModel = hiltViewModel()
+                WorkspaceDetailScreen(
+                    viewModel = viewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenChat = { serverId, sessionId, cwd, workspaceId, title ->
+                        val encodedCwd = Uri.encode(cwd)
+                        val encodedTitle = Uri.encode(title ?: "Untitled Session")
+                        val encodedWs = Uri.encode(workspaceId)
+                        navController.navigate(
+                            "chat/$serverId/$sessionId?cwd=$encodedCwd&updatedAt=-1&title=$encodedTitle&workspaceId=$encodedWs"
+                        )
+                    },
+                )
+            }
+
             composable("server_list") {
                 val viewModel: ServerListViewModel = hiltViewModel()
                 val uiState by viewModel.uiState.collectAsState()
@@ -291,7 +329,7 @@ fun FerngeistNavHost() {
             }
 
             composable(
-                route = "chat/{serverId}/{sessionId}?cwd={cwd}&updatedAt={updatedAt}&title={title}",
+                route = "chat/{serverId}/{sessionId}?cwd={cwd}&updatedAt={updatedAt}&title={title}&workspaceId={workspaceId}",
                 arguments = listOf(
                     navArgument("serverId") { type = NavType.StringType },
                     navArgument("sessionId") { type = NavType.StringType },
@@ -308,6 +346,11 @@ fun FerngeistNavHost() {
                         type = NavType.StringType
                         nullable = true
                         defaultValue = "Untitled Session"
+                    },
+                    navArgument("workspaceId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
                     },
                 ),
             ) { backStackEntry ->

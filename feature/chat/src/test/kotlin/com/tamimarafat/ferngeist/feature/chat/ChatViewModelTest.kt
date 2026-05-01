@@ -12,6 +12,8 @@ import com.tamimarafat.ferngeist.core.model.repository.DesktopHelperSourceReposi
 import com.tamimarafat.ferngeist.core.model.repository.LaunchableTargetRepository
 import com.tamimarafat.ferngeist.core.model.repository.LaunchableTargetSessionSettingsRepository
 import com.tamimarafat.ferngeist.core.model.repository.SessionRepository
+import com.tamimarafat.ferngeist.core.model.repository.WorkspaceRepository
+import com.tamimarafat.ferngeist.core.model.Workspace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -130,6 +132,7 @@ class ChatViewModelTest {
         )
         val targetRepository = FakeLaunchableTargetRepository()
         val sessionRepository = FakeSessionRepository()
+        val workspaceRepository = FakeWorkspaceRepository()
         val handle = SavedStateHandle(
             mapOf(
                 "serverId" to "server_1",
@@ -143,6 +146,7 @@ class ChatViewModelTest {
             helperSourceRepository = FakeDesktopHelperSourceRepository(),
             launchableTargetRepository = targetRepository,
             sessionRepository = sessionRepository,
+            workspaceRepository = workspaceRepository,
             helperRepository = FakeDesktopHelperRepository(),
             chatScrollStateStore = chatScrollStateStore,
             savedStateHandle = handle,
@@ -192,6 +196,19 @@ private class FakeSessionRepository : SessionRepository {
     override suspend fun upsertSession(serverId: String, workspaceId: String?, summary: SessionSummary) = Unit
     override suspend fun deleteSession(serverId: String, sessionId: String) = Unit
     override suspend fun clearSessions(serverId: String) = Unit
+}
+
+private class FakeWorkspaceRepository : WorkspaceRepository {
+    override fun getAllWorkspaces(): Flow<List<Workspace>> = emptyFlow()
+    override suspend fun findByKey(helperKey: String, cwd: String): Workspace? = null
+    override suspend fun getById(id: String): Workspace? = null
+    override suspend fun findOrCreate(helperKey: String, cwd: String): Workspace =
+        Workspace(id = "$helperKey|$cwd", helperKey = helperKey, cwd = cwd, displayName = null, createdAt = 0L, updatedAt = 0L)
+    override suspend fun helperKeyForServer(serverId: String): String? = null
+    override suspend fun findOrCreateForServer(serverId: String, cwd: String): Workspace? = null
+    override suspend fun rename(workspaceId: String, displayName: String?) = Unit
+    override suspend fun touch(workspaceId: String) = Unit
+    override suspend fun delete(workspaceId: String, cascadeSessions: Boolean) = Unit
 }
 
 private class FakeDesktopHelperRepository : com.tamimarafat.ferngeist.feature.serverlist.helper.DesktopHelperRepository {
