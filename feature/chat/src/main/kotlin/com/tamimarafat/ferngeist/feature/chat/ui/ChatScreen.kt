@@ -884,6 +884,19 @@ fun ChatScreen(
                             chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                             context.startActivity(chooser)
                         },
+                        onCopyAsMarkdown = {
+                            val markdown = com.tamimarafat.ferngeist.feature.chat.ThreadMarkdown.render(
+                                messages = state.messages,
+                                sessionTitle = sessionTitle,
+                            )
+                            val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                            cm?.setPrimaryClip(
+                                android.content.ClipData.newPlainText(sessionTitle, markdown),
+                            )
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Thread copied as Markdown")
+                            }
+                        },
                         sharedTransitionScope = sharedTransitionScope,
                         animatedContentScope = animatedContentScope,
                     )
@@ -1057,6 +1070,7 @@ private fun ChatTopBar(
     onNavigateBack: () -> Unit,
     onConnectionStatusClick: () -> Unit,
     onShareAsMarkdown: () -> Unit,
+    onCopyAsMarkdown: () -> Unit,
     sharedTransitionScope: SharedTransitionScope,
     animatedContentScope: AnimatedContentScope,
 ) {
@@ -1117,6 +1131,13 @@ private fun ChatTopBar(
                     onClick = {
                         menuOpen = false
                         onShareAsMarkdown()
+                    },
+                )
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Copy as Markdown") },
+                    onClick = {
+                        menuOpen = false
+                        onCopyAsMarkdown()
                     },
                 )
             }
