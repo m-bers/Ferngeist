@@ -11,6 +11,8 @@ import androidx.core.app.NotificationCompat
 import com.tamimarafat.ferngeist.MainActivity
 import com.tamimarafat.ferngeist.R
 import androidx.core.app.RemoteInput
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionRegistry
 import com.tamimarafat.ferngeist.acp.bridge.connection.AcpConnectionState
 import com.tamimarafat.ferngeist.acp.bridge.connection.PermissionFlowEvent
@@ -130,6 +132,11 @@ class FerngeistForegroundService : Service() {
 
     private fun handleTurnCompleteEvent(tagged: TaggedTurnCompleteEvent) {
         val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (isAppForeground()) {
+            // User is in the app; they saw the turn finish in the chat — no need
+            // to nag them with an end-of-turn notification.
+            return
+        }
         val notificationId = TURN_COMPLETE_NOTIFICATION_ID_BASE + tagged.event.sessionId.hashCode().and(0x7FFF_FFFF)
 
         val agentName = connectionRegistry.existingConnectionFor(tagged.serverId)
@@ -180,11 +187,24 @@ class FerngeistForegroundService : Service() {
         nm.notify(notificationId, notification)
     }
 
+    private fun isAppForeground(): Boolean {
+        // Returns true when the user has any Ferngeist activity at least RESUMED
+        // (i.e. on screen and interactive). Used to suppress notifications that the
+        // user would otherwise see in-app via the chat sheet.
+        return ProcessLifecycleOwner.get().lifecycle.currentState
+            .isAtLeast(Lifecycle.State.RESUMED)
+    }
+
     private fun handlePermissionEvent(tagged: TaggedPermissionEvent) {
         val nm = getSystemService(NotificationManager::class.java) ?: return
         val notificationId = PERMISSION_NOTIFICATION_ID_BASE + tagged.event.toolCallId.hashCode()
         when (val event = tagged.event) {
             is PermissionFlowEvent.Requested -> {
+                if (isAppForeground()) {
+                    // The in-app PermissionRequestSheet will handle this; no need to
+                    // double up with a notification.
+                    return
+                }
                 val notification = buildPermissionNotification(
                     serverId = tagged.serverId,
                     event = event,
