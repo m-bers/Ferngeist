@@ -450,11 +450,9 @@ private fun ToolCallDetailsSheet(
                     shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(
+                    DiffOrPlainText(
                         text = output,
-                        style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(12.dp),
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                     )
                 }
             } ?: Text(
