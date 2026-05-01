@@ -18,7 +18,7 @@ This file is the catch-up sheet. Full details are in commit messages on `ci/temp
 ### Tier B — Rich Android notifications
 - **B1+B2** — When an agent calls `session/request_permission`, Ferngeist posts a high-importance notification with one action button per `PermissionOption` plus a Deny fallback. Tapping a button calls back into the right per-server `AcpConnectionManager` to dispatch the response. Covers tool approvals **and** plan-stage multiple-choice prompts (same code path).
 - **B3** — When an agent finishes a turn, Ferngeist posts a default-importance notification with a `RemoteInput` reply field. Typing and tapping Reply sends the next prompt on that session without opening the app.
-- **B4** — Foreground-suppression via `ProcessLifecycleOwner`. Notifications are skipped when any Ferngeist activity is RESUMED (the in-app sheet handles those cases).
+- **B4** — Session-aware foreground suppression via `ProcessLifecycleOwner` + a `CurrentChatTracker` singleton. A notification is suppressed only when the user is on *that exact* chat session; events for *other* sessions still fire even when the app is in the foreground.
 - **B5 (preferences)** — **Not yet done**.
 
 ### Tier C — ACP protocol parity
@@ -28,10 +28,12 @@ This file is the catch-up sheet. Full details are in commit messages on `ci/temp
 - **C3 / C4 / C5 / C6** — **Not yet done**.
 
 ### Tier D — UX (Zed parity)
-- **D2** — Message queueing while a turn is generating. New `ChatState.queuedMessages`; a `SendMessage` submitted while `isStreaming` queues; on `TurnComplete`, the next queued message is dispatched automatically.
+- **D2** — Message queueing while a turn is generating. New `ChatState.queuedMessages`; a `SendMessage` submitted while `isStreaming` queues; on `TurnComplete`, the next queued message is dispatched automatically. A "<N> queued — tap to clear" pill appears above the composer.
+- **D3 (partial)** — Tap any past user message to copy it back into the composer for a quick re-send / tweak. (True Zed-style "rewind to checkpoint" requires a feature ACP doesn't standardize, parked as D7.)
 - **D4 (search half)** — Search bar at the top of `WorkspaceListScreen` (filters workspaces by name/cwd) and `WorkspaceDetailScreen` (filters threads by title/cwd/agent name). Auto-titling is the other half — needs an LLM call, parked.
 - **D5** — Archive / restore / history. Sessions gain an `isArchived` column (migration v12→v13). Workspace detail screen has a "Show archived (N)" toggle in its kebab; threads can be archived via per-row kebab and restored from the archived view.
-- **D1, D3, D4 (titling), D6, D7** — **Not yet done**.
+- **(bonus)** — Composer-draft persistence per (serverId, sessionId): typed text now survives navigation between threads and activity destruction, via a new `ChatDraftStore` SharedPreferences-backed singleton.
+- **D1, D4 (titling), D6, D7** — **Not yet done**.
 
 ### Tier F — Polish
 - **F1** — Open thread as Markdown. Kebab in the chat top bar now has an "Open as Markdown" item that builds a Markdown rendering of the thread (user/agent/tool/thought/plan segments) and fires `ACTION_SEND`.
