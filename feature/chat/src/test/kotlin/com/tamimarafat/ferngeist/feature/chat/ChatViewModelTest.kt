@@ -187,7 +187,9 @@ private class FakeDesktopHelperSourceRepository : DesktopHelperSourceRepository 
 
 private class FakeSessionRepository : SessionRepository {
     override fun getSessions(serverId: String): Flow<List<SessionSummary>> = emptyFlow()
+    override fun getSessionsForWorkspace(workspaceId: String): Flow<List<SessionSummary>> = emptyFlow()
     override suspend fun upsertSession(serverId: String, summary: SessionSummary) = Unit
+    override suspend fun upsertSession(serverId: String, workspaceId: String?, summary: SessionSummary) = Unit
     override suspend fun deleteSession(serverId: String, sessionId: String) = Unit
     override suspend fun clearSessions(serverId: String) = Unit
 }
