@@ -186,7 +186,11 @@ class ChatViewModel @Inject constructor(
                 // agent was still working are sent at the next turn boundary.
                 val pending = state.value.queuedMessages.firstOrNull() ?: return
                 updateState { copy(queuedMessages = queuedMessages.drop(1)) }
-                sessionCoordinator.sendMessage(pending.text, pending.images)
+                // Route through dispatch so this lambda doesn't reference
+                // sessionCoordinator (which is still being initialized at type-check
+                // time, causing a recursive type-inference error). DispatchQueued is
+                // handled by handleIntent below and bypasses the streaming-queue check.
+                dispatch(ChatIntent.DispatchQueuedMessage(pending.text, pending.images))
             }
         },
     )
@@ -305,6 +309,11 @@ class ChatViewModel @Inject constructor(
             ChatIntent.ClearQueuedMessages -> {
                 updateState { copy(queuedMessages = emptyList()) }
             }
+            is ChatIntent.DispatchQueuedMessage -> {
+                // Bypasses the streaming-queue gate; used internally by onTurnComplete
+                // to flush the next queued user message at a turn boundary.
+                sessionCoordinator.sendMessage(intent.text, intent.images)
+            }
         }
     }
 
@@ -377,6 +386,8 @@ sealed interface ChatIntent {
     data object RetryLoad : ChatIntent
     data class RemoveQueuedMessage(val id: String) : ChatIntent
     data object ClearQueuedMessages : ChatIntent
+    /** Internal: dispatches a previously-queued message at a turn boundary. */
+    data class DispatchQueuedMessage(val text: String, val images: List<ChatImageData> = emptyList()) : ChatIntent
 }
 
 sealed interface ChatEffect {
